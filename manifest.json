@@ -5,8 +5,23 @@
   "description": "Personal selection builder with sync (Wish/Sell/Buy/Sell Sets) and PNG export.",
   "action": {
     "default_popup": "popup.html",
-    "default_title": "YoSelection",\n    "default_icon": {\n      "16": "Icons/16x16.png",\n      "32": "Icons/32x32.png",\n      "48": "Icons/48x48.png",\n      "128": "Icons/128x128.png"\n    }\n  },
-  "side_panel": {\n    "default_path": "sidepanel.html"\n  },\n  "icons": {\n    "16": "Icons/16x16.png",\n    "32": "Icons/32x32.png",\n    "48": "Icons/48x48.png",\n    "128": "Icons/128x128.png"\n  },
+    "default_title": "YoSelection",
+    "default_icon": {
+      "16": "Icons/16x16.png",
+      "32": "Icons/32x32.png",
+      "48": "Icons/48x48.png",
+      "128": "Icons/128x128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "icons": {
+    "16": "Icons/16x16.png",
+    "32": "Icons/32x32.png",
+    "48": "Icons/48x48.png",
+    "128": "Icons/128x128.png"
+  },
   "permissions": [
     "storage",
     "sidePanel"
@@ -16,4 +31,3 @@
     "https://yw-web.yoworld.com/*"
   ]
 }
-
