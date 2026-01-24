@@ -5,7 +5,7 @@
   "description": "Personal selection builder with sync (Wish/Sell/Buy/Sell Sets) and PNG export.",
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Yo Template Sync"
+    "default_title": "YoSelection"
   },
   "side_panel": {
     "default_path": "sidepanel.html"
