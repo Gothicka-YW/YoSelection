@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "YoSelection",
+  "version": "0.1.0",
+  "description": "Personal selection builder with sync (Wish/Sell/Buy/Sell Sets) and PNG export.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Yo Template Sync"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "permissions": [
+    "storage",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://api.yoworld.info/*",
+    "https://yw-web.yoworld.com/*"
+  ]
+}
