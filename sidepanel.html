@@ -66,6 +66,7 @@
       <h2>Wish List</h2>
       <div class="inline">
         <button id="btn-refresh-wish" class="ghost" type="button">Refresh</button>
+        <button id="btn-repair-wish" class="ghost" type="button">Repair Images</button>
         <button id="btn-clear-wish" class="ghost" type="button">Clear</button>
       </div>
     </div>
@@ -77,6 +78,7 @@
       <h2>Sell</h2>
       <div class="inline">
         <button id="btn-refresh-sell" class="ghost" type="button">Refresh</button>
+        <button id="btn-repair-sell" class="ghost" type="button">Repair Images</button>
         <button id="btn-clear-sell" class="ghost" type="button">Clear</button>
       </div>
     </div>
@@ -88,6 +90,7 @@
       <h2>Sell Sets</h2>
       <div class="inline">
         <button id="btn-refresh-sellSets" class="ghost" type="button">Refresh</button>
+        <button id="btn-repair-sellSets" class="ghost" type="button">Repair Images</button>
         <button id="btn-clear-sellSets" class="ghost" type="button">Clear</button>
       </div>
     </div>
@@ -99,6 +102,7 @@
       <h2>Buy</h2>
       <div class="inline">
         <button id="btn-refresh-buy" class="ghost" type="button">Refresh</button>
+        <button id="btn-repair-buy" class="ghost" type="button">Repair Images</button>
         <button id="btn-clear-buy" class="ghost" type="button">Clear</button>
       </div>
     </div>
@@ -107,6 +111,26 @@
 
   <section class="card" data-panel="settings" hidden>
     <h2>Settings</h2>
+
+    <div class="row">
+      <label class="lbl">Backup</label>
+      <div class="inline" style="gap:8px; flex-wrap:wrap;">
+        <button id="btn-backup-export" type="button">Export Backup (JSON)</button>
+        <input id="backup-file" type="file" accept="application/json,.json" />
+        <button id="btn-backup-import" type="button">Import Backup</button>
+      </div>
+      <div class="hint">Export saves your lists/settings to a JSON file. Import will replace your current synced data.</div>
+    </div>
+
+    <div class="row">
+      <label class="lbl" for="image-source-select">Item image source</label>
+      <select id="image-source-select">
+        <option value="cdn">YoWorld CDN (fast, sometimes missing)</option>
+        <option value="info">YoWorld.info image link (more reliable)</option>
+        <option value="auto">Auto (CDN, fallback to YoWorld.info)</option>
+      </select>
+      <div class="hint">If you see broken images, switch to YoWorld.info or Auto.</div>
+    </div>
 
     <div class="row">
       <label class="lbl" for="theme-select">Color theme</label>

@@ -10,7 +10,8 @@ function defaultState(){
     sellSets: [],
     buy: [],
     settings: {
-      theme: 'classic'
+      theme: 'classic',
+      imageSource: 'cdn' // 'cdn' | 'info' | 'auto'
     }
   };
 }
@@ -147,6 +148,92 @@ function themeFromState(){
   return (t === 'classic' || t === 'dark' || t === 'valentine') ? t : 'classic';
 }
 
+function imageSourceFromState(){
+  const v = state?.settings?.imageSource;
+  return (v === 'cdn' || v === 'info' || v === 'auto') ? v : 'cdn';
+}
+
+function normalizeImportedState(maybe){
+  // Accept either { data: <state>, ... } wrapper or raw state.
+  const raw = (maybe && typeof maybe === 'object' && maybe.data && typeof maybe.data === 'object') ? maybe.data : maybe;
+  const s = (raw && typeof raw === 'object') ? raw : {};
+
+  return {
+    wish: Array.isArray(s.wish) ? s.wish : [],
+    sell: Array.isArray(s.sell) ? s.sell : [],
+    sellSets: Array.isArray(s.sellSets) ? s.sellSets : [],
+    buy: Array.isArray(s.buy) ? s.buy : [],
+    settings: {
+      theme: (s?.settings?.theme === 'classic' || s?.settings?.theme === 'dark' || s?.settings?.theme === 'valentine')
+        ? s.settings.theme
+        : 'classic',
+      imageSource: (s?.settings?.imageSource === 'cdn' || s?.settings?.imageSource === 'info' || s?.settings?.imageSource === 'auto')
+        ? s.settings.imageSource
+        : 'cdn'
+    }
+  };
+}
+
+async function exportBackupJson(){
+  const payload = {
+    app: 'YoSelection',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    data: state
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  a.href = url;
+  a.download = `yoselection-backup-${stamp}.json`;
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+
+async function importBackupJsonFromFile(file){
+  if(!file){
+    alert('Choose a backup .json file first.');
+    return;
+  }
+
+  let text = '';
+  try{
+    text = await file.text();
+  }catch{
+    alert('Could not read file.');
+    return;
+  }
+
+  let parsed;
+  try{
+    parsed = JSON.parse(text);
+  }catch{
+    alert('Invalid JSON file.');
+    return;
+  }
+
+  const next = normalizeImportedState(parsed);
+
+  const count = (next.wish.length + next.sell.length + next.sellSets.length + next.buy.length);
+  const ok = confirm(`Import backup and replace your current synced data?\n\nItems in backup: ${count}`);
+  if(!ok) return;
+
+  state = next;
+  applyTheme(themeFromState());
+  await saveState();
+
+  // Sync UI controls
+  const themeSelect = $('#theme-select');
+  if(themeSelect) themeSelect.value = themeFromState();
+  const imgSourceSelect = $('#image-source-select');
+  if(imgSourceSelect) imgSourceSelect.value = imageSourceFromState();
+
+  render();
+  alert('Backup imported successfully.');
+}
+
 function applyTheme(theme){
   if(!document?.body) return;
   if(theme === 'classic'){
@@ -223,7 +310,10 @@ async function loadState(){
         settings: {
           theme: (s?.settings?.theme === 'classic' || s?.settings?.theme === 'dark' || s?.settings?.theme === 'valentine')
             ? s.settings.theme
-            : 'classic'
+            : 'classic',
+          imageSource: (s?.settings?.imageSource === 'cdn' || s?.settings?.imageSource === 'info' || s?.settings?.imageSource === 'auto')
+            ? s.settings.imageSource
+            : 'cdn'
         }
       };
       resolve();
@@ -243,6 +333,50 @@ function buildYwCdnImageUrlFromId(itemId){
   const g1 = String(Math.floor(id / 10000)).padStart(2,'0');
   const g2 = String(Math.floor((id % 10000) / 100)).padStart(2,'0');
   return `https://yw-web.yoworld.com/cdn/items/${g1}/${g2}/${id}/${id}.png`;
+}
+
+function extractYoWorldInfoImageUrl(detail, itemId){
+  const candidates = [
+    detail?.image_url,
+    detail?.imageUrl,
+    detail?.image,
+    detail?.image_path,
+    detail?.img,
+    detail?.icon,
+    detail?.icon_url,
+    detail?.thumbnail,
+    detail?.thumbnail_url,
+    detail?.cdn_image_url,
+    detail?.cdnImageUrl
+  ].filter(Boolean);
+
+  for(const c of candidates){
+    if(typeof c !== 'string') continue;
+    const u = c.trim();
+    if(!u) continue;
+    if(/^https?:\/\//i.test(u)) return u;
+    // Some APIs return relative paths
+    if(u.startsWith('/')) return `https://yoworld.info${u}`;
+  }
+
+  // Fallback: if not provided, leave empty.
+  // (We still have the YoWorld CDN derived URL.)
+  void itemId;
+  return '';
+}
+
+async function ensureInfoImageUrl(entry){
+  if(!entry || !entry.id) return '';
+  if(typeof entry.ywInfoImageUrl === 'string' && entry.ywInfoImageUrl.trim()) return entry.ywInfoImageUrl.trim();
+  try{
+    const detail = await apiItemDetail(entry.id);
+    const u = extractYoWorldInfoImageUrl(detail, entry.id);
+    if(u){
+      entry.ywInfoImageUrl = u;
+      return u;
+    }
+  }catch{}
+  return '';
 }
 
 async function apiSearch(query){
@@ -345,6 +479,23 @@ function renderGrid(section, root){
     img.alt = item.name || 'Item';
     img.loading = 'lazy';
     img.referrerPolicy = 'no-referrer';
+    img.addEventListener('error', async()=>{
+      // Try to repair broken images by swapping to YoWorld.info URL.
+      if(img.dataset.fallbackTried === '1') return;
+      img.dataset.fallbackTried = '1';
+      const prefer = imageSourceFromState();
+      if(prefer === 'cdn'){
+        // User explicitly prefers CDN; don't auto-repair unless we already have an info URL.
+        if(!item?.ywInfoImageUrl) return;
+      }
+      const fallback = await ensureInfoImageUrl(item);
+      if(!fallback) return;
+      if(item.imageUrl !== fallback){
+        item.imageUrl = fallback;
+        img.src = fallback;
+        try{ await saveState(); }catch{}
+      }
+    });
     tile.appendChild(img);
 
     const pad = el('div','tpad');
@@ -450,12 +601,23 @@ async function doSearch(){
 
         let activeInStore = false;
         let fullName = it.name || '';
+        let infoImageUrl = '';
         try{
           const detail = await apiItemDetail(it.id);
           activeInStore = !!detail?.active_in_store;
           if(detail?.name) fullName = detail.name;
+          infoImageUrl = extractYoWorldInfoImageUrl(detail, it.id);
         }catch{
           activeInStore = false;
+        }
+
+        const cdnImageUrl = buildYwCdnImageUrlFromId(it.id);
+        const source = imageSourceFromState();
+        let chosenImageUrl = cdnImageUrl;
+        if(source === 'info'){
+          chosenImageUrl = infoImageUrl || cdnImageUrl;
+        }else if(source === 'auto'){
+          chosenImageUrl = cdnImageUrl || infoImageUrl;
         }
 
         const entry = {
@@ -463,7 +625,9 @@ async function doSearch(){
           id: it.id,
           name: fullName,
           note,
-          imageUrl: buildYwCdnImageUrlFromId(it.id),
+          imageUrl: chosenImageUrl,
+          ywCdnImageUrl: cdnImageUrl,
+          ywInfoImageUrl: infoImageUrl,
           activeInStore,
           addedAt: Date.now()
         };
@@ -589,6 +753,28 @@ async function loadImage(url){
   });
 }
 
+async function canLoadImage(url, timeoutMs){
+  const u = String(url || '').trim();
+  if(!u) return false;
+  const ms = Number.isFinite(timeoutMs) ? timeoutMs : 4500;
+  return new Promise((resolve)=>{
+    const img = new Image();
+    let done = false;
+    const finish = (ok)=>{
+      if(done) return;
+      done = true;
+      try{ img.onload = null; img.onerror = null; }catch{}
+      resolve(!!ok);
+    };
+    const t = setTimeout(()=>finish(false), ms);
+    img.onload = ()=>{ clearTimeout(t); finish(true); };
+    img.onerror = ()=>{ clearTimeout(t); finish(false); };
+    // Bust caches so we don't get stuck on a cached broken response.
+    const sep = u.includes('?') ? '&' : '?';
+    img.src = u + sep + 'cb=' + Date.now().toString(36);
+  });
+}
+
 function exportSectionsForScope(scope){
   const all = [
     { key: 'wish', title: 'Wish List' },
@@ -695,7 +881,15 @@ async function exportPng(scope){
         const imgH = 88;
 
         try{
-          const img = await loadImage(item.imageUrl);
+          let img;
+          try{
+            img = await loadImage(item.imageUrl);
+          }catch{
+            // If export hits broken CDN URLs, try YoWorld.info as fallback.
+            const fallback = await ensureInfoImageUrl(item);
+            if(fallback) img = await loadImage(fallback);
+            else throw new Error('no fallback');
+          }
           drawContain(ctx, img, imgX, imgY, imgW, imgH);
           ctx.strokeStyle = pal.tileBorder;
           ctx.lineWidth = 2;
@@ -870,6 +1064,42 @@ async function refreshSection(section){
   render();
 }
 
+async function repairImagesInSection(section){
+  const items = state[section] || [];
+  if(!items.length){
+    alert('Nothing to repair in this section.');
+    return;
+  }
+
+  const ok = confirm('This will check each item image and swap to the YoWorld.info image link when broken. Continue?');
+  if(!ok) return;
+
+  let changed = 0;
+  let checked = 0;
+
+  for(const entry of items){
+    if(!entry?.id) continue;
+    checked++;
+
+    const currentUrl = String(entry.imageUrl || '').trim();
+    const good = await canLoadImage(currentUrl, 4500);
+    if(good) continue;
+
+    const fallback = await ensureInfoImageUrl(entry);
+    if(fallback && fallback !== currentUrl){
+      entry.imageUrl = fallback;
+      changed++;
+    }
+  }
+
+  if(changed){
+    await saveState();
+    render();
+  }
+
+  alert(`Repair complete. Checked ${checked} items; updated ${changed} image links.`);
+}
+
 document.addEventListener('DOMContentLoaded', async()=>{
   await loadState();
   applyTheme(themeFromState());
@@ -893,6 +1123,24 @@ document.addEventListener('DOMContentLoaded', async()=>{
     });
   }
 
+  const imgSourceSelect = $('#image-source-select');
+  if(imgSourceSelect){
+    imgSourceSelect.value = imageSourceFromState();
+    imgSourceSelect.addEventListener('change', async()=>{
+      const v = imgSourceSelect.value;
+      state.settings = state.settings || {};
+      state.settings.imageSource = (v === 'cdn' || v === 'info' || v === 'auto') ? v : 'cdn';
+      await saveState();
+    });
+  }
+
+  // Backup UI
+  $('#btn-backup-export')?.addEventListener('click', exportBackupJson);
+  $('#btn-backup-import')?.addEventListener('click', async()=>{
+    const file = $('#backup-file')?.files?.[0] || null;
+    await importBackupJsonFromFile(file);
+  });
+
   $('#btn-search')?.addEventListener('click', doSearch);
   $('#in-query')?.addEventListener('keydown', (e)=>{
     if(e.key === 'Enter') doSearch();
@@ -914,6 +1162,11 @@ document.addEventListener('DOMContentLoaded', async()=>{
   $('#btn-refresh-sellSets')?.addEventListener('click', ()=>refreshSection('sellSets'));
   $('#btn-refresh-buy')?.addEventListener('click', ()=>refreshSection('buy'));
 
+  $('#btn-repair-wish')?.addEventListener('click', ()=>repairImagesInSection('wish'));
+  $('#btn-repair-sell')?.addEventListener('click', ()=>repairImagesInSection('sell'));
+  $('#btn-repair-sellSets')?.addEventListener('click', ()=>repairImagesInSection('sellSets'));
+  $('#btn-repair-buy')?.addEventListener('click', ()=>repairImagesInSection('buy'));
+
   // Keep state updated across devices.
   chrome.storage.onChanged.addListener((changes, area)=>{
     if(area !== 'sync') return;
@@ -927,12 +1180,17 @@ document.addEventListener('DOMContentLoaded', async()=>{
       settings: {
         theme: (s?.settings?.theme === 'classic' || s?.settings?.theme === 'dark' || s?.settings?.theme === 'valentine')
           ? s.settings.theme
-          : 'classic'
+          : 'classic',
+        imageSource: (s?.settings?.imageSource === 'cdn' || s?.settings?.imageSource === 'info' || s?.settings?.imageSource === 'auto')
+          ? s.settings.imageSource
+          : 'cdn'
       }
     };
     applyTheme(themeFromState());
     const themeSelect = $('#theme-select');
     if(themeSelect) themeSelect.value = themeFromState();
+    const imgSourceSelect = $('#image-source-select');
+    if(imgSourceSelect) imgSourceSelect.value = imageSourceFromState();
     render();
   });
 });
