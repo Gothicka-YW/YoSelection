@@ -1,6 +1,6 @@
 const SYNC_KEY = 'yo_template_sync_v1';
 const LOCAL_KEY = 'yo_template_local_v1';
-const SYNC_WARN_KEY = 'yo_template_sync_warned_v1';
+const SYNC_SETTINGS_KEY = 'yo_template_sync_settings_v1';
 
 function $(s){return document.querySelector(s);}
 function el(t,c){const e=document.createElement(t); if(c) e.className=c; return e;}
@@ -223,7 +223,7 @@ async function importBackupJsonFromFile(file){
   const next = normalizeImportedState(parsed);
 
   const count = (next.wish.length + next.sell.length + next.sellSets.length + next.buy.length);
-  const ok = confirm(`Import backup and replace your current synced data?\n\nItems in backup: ${count}`);
+  const ok = confirm(`Import backup and replace your current saved data?\n\nItems in backup: ${count}`);
   if(!ok) return;
 
   state = next;
@@ -354,23 +354,35 @@ function storageSet(area, key, value){
 }
 
 async function loadState(){
-  const [syncRes, localRes] = await Promise.all([
+  const [legacySyncRes, localRes, syncSettingsRes] = await Promise.all([
     storageGet('sync', SYNC_KEY),
-    storageGet('local', LOCAL_KEY)
+    storageGet('local', LOCAL_KEY),
+    storageGet('sync', SYNC_SETTINGS_KEY)
   ]);
 
-  if(syncRes.error) console.warn('sync get failed:', syncRes.error);
+  if(legacySyncRes.error) console.warn('sync get failed:', legacySyncRes.error);
+  if(syncSettingsRes.error) console.warn('sync settings get failed:', syncSettingsRes.error);
   if(localRes.error) console.warn('local get failed:', localRes.error);
 
-  const syncState = normalizeStateFromStorage(syncRes.value);
+  // Lists live in local. For backward compatibility, we still *read* legacy sync full-state.
+  const legacySyncState = normalizeStateFromStorage(legacySyncRes.value);
   const localState = normalizeStateFromStorage(localRes.value);
 
-  const syncCount = countItemsInState(syncState);
+  const legacyCount = countItemsInState(legacySyncState);
   const localCount = countItemsInState(localState);
+  const listState = (localCount >= legacyCount) ? localState : legacySyncState;
 
-  // Prefer whichever store has more items. This prevents accidental "empty" sync reads
-  // (or quota failures preventing writes) from wiping the UI.
-  state = (localCount > syncCount) ? localState : (syncCount > 0 ? syncState : (localCount > 0 ? localState : syncState));
+  // Settings are small enough to sync reliably.
+  const syncedSettingsOnly = normalizeStateFromStorage({ settings: syncSettingsRes.value }).settings;
+  const haveSyncedSettings = !!(syncSettingsRes.value && typeof syncSettingsRes.value === 'object');
+
+  state = {
+    wish: listState.wish,
+    sell: listState.sell,
+    sellSets: listState.sellSets,
+    buy: listState.buy,
+    settings: haveSyncedSettings ? syncedSettingsOnly : listState.settings
+  };
 }
 
 async function saveState(){
@@ -378,17 +390,9 @@ async function saveState(){
   const local = await storageSet('local', LOCAL_KEY, state);
   if(!local.ok) console.warn('local set failed:', local.error);
 
-  // Best-effort mirror to sync (can fail due to QUOTA_BYTES_PER_ITEM ~8KB).
-  const sync = await storageSet('sync', SYNC_KEY, state);
-  if(!sync.ok){
-    console.warn('sync set failed:', sync.error);
-    try{
-      if(!localStorage.getItem(SYNC_WARN_KEY)){
-        localStorage.setItem(SYNC_WARN_KEY, '1');
-        alert('YoSelection: Chrome sync storage is full/blocked, so your lists are being saved locally only.\n\nTip: Use Settings → Backup Export for an extra copy.');
-      }
-    }catch{}
-  }
+  // Sync only lightweight settings (theme/image source). Lists stay local to avoid sync quota errors.
+  const syncSettings = await storageSet('sync', SYNC_SETTINGS_KEY, state.settings || {});
+  if(!syncSettings.ok) console.warn('sync settings set failed:', syncSettings.error);
 }
 
 function buildYwCdnImageUrlFromId(itemId){
