@@ -51,6 +51,10 @@
     </div>
 
     <div id="results" class="results"></div>
+
+    <div id="drop-zone" class="dropzone" aria-label="Drop YoWorld.info link">
+      Drop a YoWorld.info item link here to add it
+    </div>
   </section>
 
   <nav class="tabs" aria-label="Template Sections">
@@ -58,6 +62,7 @@
     <button class="tab" type="button" data-tab="sell">Sell</button>
     <button class="tab" type="button" data-tab="sellSets">Sell Sets</button>
     <button class="tab" type="button" data-tab="buy">Buy</button>
+    <button class="tab" type="button" data-tab="pricecheck">Price Check</button>
     <button class="tab" type="button" data-tab="settings">Settings</button>
   </nav>
 
@@ -107,6 +112,22 @@
       </div>
     </div>
     <div id="grid-buy" class="grid"></div>
+  </section>
+
+  <section class="card" data-panel="pricecheck" hidden>
+    <h2>Price Check</h2>
+    <div class="row">
+      <label class="lbl" for="pc-query">Search (or paste item link/ID)</label>
+      <div class="inline">
+        <input id="pc-query" type="text" placeholder="e.g., 'Cupid Bow', 123456, or a YoWorld.info link">
+        <button id="pc-btn-search" type="button">Search</button>
+      </div>
+      <div class="hint">Uses api.yoworld.info. Pick an item and copy a “price check” message to ask other players.</div>
+    </div>
+    <div id="pc-results" class="results"></div>
+    <div id="pc-detail" class="card" style="border:1px solid var(--border); border-radius:12px; margin-top:10px;">
+      <div class="hint">Select an item to view details.</div>
+    </div>
   </section>
 
   <section class="card" data-panel="settings" hidden>

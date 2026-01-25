@@ -1,4 +1,6 @@
 const SYNC_KEY = 'yo_template_sync_v1';
+const LOCAL_KEY = 'yo_template_local_v1';
+const SYNC_WARN_KEY = 'yo_template_sync_warned_v1';
 
 function $(s){return document.querySelector(s);}
 function el(t,c){const e=document.createElement(t); if(c) e.className=c; return e;}
@@ -37,6 +39,10 @@ function saveTabDrafts(drafts){
 
 function isListTab(tabName){
   return tabName === 'wish' || tabName === 'sell' || tabName === 'sellSets' || tabName === 'buy';
+}
+
+function isKnownTab(tabName){
+  return tabName === 'wish' || tabName === 'sell' || tabName === 'sellSets' || tabName === 'buy' || tabName === 'pricecheck' || tabName === 'settings';
 }
 
 function persistDraftForTab(tabName){
@@ -137,7 +143,7 @@ function wireTabs(){
   }
   let initial = 'wish';
   try{ initial = localStorage.getItem(ACTIVE_TAB_KEY) || 'wish'; }catch{}
-  if(!['wish','sell','sellSets','buy','settings'].includes(initial)) initial = 'wish';
+  if(!isKnownTab(initial)) initial = 'wish';
   currentTab = initial;
   setActiveTab(initial);
 }
@@ -298,33 +304,91 @@ function exportPalette(theme){
   };
 }
 
-async function loadState(){
+function normalizeStateFromStorage(maybe){
+  const s = (maybe && typeof maybe === 'object') ? maybe : {};
+  return {
+    wish: Array.isArray(s.wish) ? s.wish : [],
+    sell: Array.isArray(s.sell) ? s.sell : [],
+    sellSets: Array.isArray(s.sellSets) ? s.sellSets : [],
+    buy: Array.isArray(s.buy) ? s.buy : [],
+    settings: {
+      theme: (s?.settings?.theme === 'classic' || s?.settings?.theme === 'dark' || s?.settings?.theme === 'valentine')
+        ? s.settings.theme
+        : 'classic',
+      imageSource: (s?.settings?.imageSource === 'cdn' || s?.settings?.imageSource === 'info' || s?.settings?.imageSource === 'auto')
+        ? s.settings.imageSource
+        : 'cdn'
+    }
+  };
+}
+
+function countItemsInState(s){
+  if(!s) return 0;
+  return (Number(s?.wish?.length) || 0) + (Number(s?.sell?.length) || 0) + (Number(s?.sellSets?.length) || 0) + (Number(s?.buy?.length) || 0);
+}
+
+function storageGet(area, key){
   return new Promise((resolve)=>{
-    chrome.storage.sync.get([SYNC_KEY], (res)=>{
-      const s = res[SYNC_KEY] || {};
-      state = {
-        wish: Array.isArray(s.wish) ? s.wish : [],
-        sell: Array.isArray(s.sell) ? s.sell : [],
-        sellSets: Array.isArray(s.sellSets) ? s.sellSets : [],
-        buy: Array.isArray(s.buy) ? s.buy : [],
-        settings: {
-          theme: (s?.settings?.theme === 'classic' || s?.settings?.theme === 'dark' || s?.settings?.theme === 'valentine')
-            ? s.settings.theme
-            : 'classic',
-          imageSource: (s?.settings?.imageSource === 'cdn' || s?.settings?.imageSource === 'info' || s?.settings?.imageSource === 'auto')
-            ? s.settings.imageSource
-            : 'cdn'
-        }
-      };
-      resolve();
-    });
+    try{
+      chrome.storage[area].get([key], (res)=>{
+        const err = chrome.runtime?.lastError;
+        resolve({ value: res ? res[key] : undefined, error: err ? String(err.message || err) : '' });
+      });
+    }catch(e){
+      resolve({ value: undefined, error: String(e && e.message ? e.message : e) });
+    }
   });
 }
 
-async function saveState(){
+function storageSet(area, key, value){
   return new Promise((resolve)=>{
-    chrome.storage.sync.set({[SYNC_KEY]: state}, ()=>resolve());
+    try{
+      chrome.storage[area].set({ [key]: value }, ()=>{
+        const err = chrome.runtime?.lastError;
+        resolve({ ok: !err, error: err ? String(err.message || err) : '' });
+      });
+    }catch(e){
+      resolve({ ok: false, error: String(e && e.message ? e.message : e) });
+    }
   });
+}
+
+async function loadState(){
+  const [syncRes, localRes] = await Promise.all([
+    storageGet('sync', SYNC_KEY),
+    storageGet('local', LOCAL_KEY)
+  ]);
+
+  if(syncRes.error) console.warn('sync get failed:', syncRes.error);
+  if(localRes.error) console.warn('local get failed:', localRes.error);
+
+  const syncState = normalizeStateFromStorage(syncRes.value);
+  const localState = normalizeStateFromStorage(localRes.value);
+
+  const syncCount = countItemsInState(syncState);
+  const localCount = countItemsInState(localState);
+
+  // Prefer whichever store has more items. This prevents accidental "empty" sync reads
+  // (or quota failures preventing writes) from wiping the UI.
+  state = (localCount > syncCount) ? localState : (syncCount > 0 ? syncState : (localCount > 0 ? localState : syncState));
+}
+
+async function saveState(){
+  // Always persist locally (higher quotas; reliable across extension reload).
+  const local = await storageSet('local', LOCAL_KEY, state);
+  if(!local.ok) console.warn('local set failed:', local.error);
+
+  // Best-effort mirror to sync (can fail due to QUOTA_BYTES_PER_ITEM ~8KB).
+  const sync = await storageSet('sync', SYNC_KEY, state);
+  if(!sync.ok){
+    console.warn('sync set failed:', sync.error);
+    try{
+      if(!localStorage.getItem(SYNC_WARN_KEY)){
+        localStorage.setItem(SYNC_WARN_KEY, '1');
+        alert('YoSelection: Chrome sync storage is full/blocked, so your lists are being saved locally only.\n\nTip: Use Settings → Backup Export for an extra copy.');
+      }
+    }catch{}
+  }
 }
 
 function buildYwCdnImageUrlFromId(itemId){
@@ -333,6 +397,48 @@ function buildYwCdnImageUrlFromId(itemId){
   const g1 = String(Math.floor(id / 10000)).padStart(2,'0');
   const g2 = String(Math.floor((id % 10000) / 100)).padStart(2,'0');
   return `https://yw-web.yoworld.com/cdn/items/${g1}/${g2}/${id}/${id}.png`;
+}
+
+function yoworldInfoProxyUrlForImageUrl(imageUrl){
+  const u = (typeof imageUrl === 'string') ? imageUrl.trim() : '';
+  if(!u) return '';
+  if(/^https?:\/\/api\.yoworld\.info\/extension\.php\?x=/i.test(u)) return u;
+  if(!/^https?:\/\//i.test(u)) return '';
+  return `https://api.yoworld.info/extension.php?x=${encodeURIComponent(u)}`;
+}
+
+function deepFindImageUrl(obj){
+  // Best-effort: crawl a few levels looking for an absolute URL that looks like an image.
+  const isImageUrl = (s)=>{
+    if(typeof s !== 'string') return false;
+    const u = s.trim();
+    if(!/^https?:\/\//i.test(u)) return false;
+    if(/\.(png|jpg|jpeg|webp)(\?|#|$)/i.test(u)) return true;
+    // Some services omit extensions but still serve images.
+    if(/image|cdn\/items|thumbnail|icon/i.test(u)) return true;
+    return false;
+  };
+
+  const seen = new Set();
+  const q = [{ v: obj, d: 0 }];
+  while(q.length){
+    const { v, d } = q.shift();
+    if(!v || d > 4) continue;
+    if(typeof v === 'string'){
+      if(isImageUrl(v)) return v.trim();
+      continue;
+    }
+    if(typeof v !== 'object') continue;
+    if(seen.has(v)) continue;
+    seen.add(v);
+
+    if(Array.isArray(v)){
+      for(const x of v) q.push({ v: x, d: d + 1 });
+    }else{
+      for(const k of Object.keys(v)) q.push({ v: v[k], d: d + 1 });
+    }
+  }
+  return '';
 }
 
 function extractYoWorldInfoImageUrl(detail, itemId){
@@ -359,15 +465,42 @@ function extractYoWorldInfoImageUrl(detail, itemId){
     if(u.startsWith('/')) return `https://yoworld.info${u}`;
   }
 
+  const deep = deepFindImageUrl(detail);
+  if(deep) return deep;
+
   // Fallback: if not provided, leave empty.
   // (We still have the YoWorld CDN derived URL.)
   void itemId;
   return '';
 }
 
+function bestImageUrlForItem(item){
+  if(!item) return '';
+  const s = (v)=> (typeof v === 'string' ? v.trim() : '');
+  const source = imageSourceFromState();
+  const direct = s(item.imageUrl);
+  const cdn = s(item.ywCdnImageUrl) || buildYwCdnImageUrlFromId(item.id);
+  const info = s(item.ywInfoImageUrl) || yoworldInfoProxyUrlForImageUrl(cdn || direct);
+
+  if(source === 'info') return info || direct || cdn;
+  if(source === 'auto') return direct || cdn || info;
+  return direct || cdn || info;
+}
+
 async function ensureInfoImageUrl(entry){
   if(!entry || !entry.id) return '';
   if(typeof entry.ywInfoImageUrl === 'string' && entry.ywInfoImageUrl.trim()) return entry.ywInfoImageUrl.trim();
+
+  // Primary strategy: use YoWorld.info's image proxy for the derived CDN URL.
+  // This endpoint often returns a valid PNG even when the direct CDN URL 404s.
+  const cdn = entry.ywCdnImageUrl || buildYwCdnImageUrlFromId(entry.id);
+  if(cdn && !entry.ywCdnImageUrl) entry.ywCdnImageUrl = cdn;
+  const proxied = yoworldInfoProxyUrlForImageUrl(cdn || entry.imageUrl);
+  if(proxied){
+    entry.ywInfoImageUrl = proxied;
+    return proxied;
+  }
+
   try{
     const detail = await apiItemDetail(entry.id);
     const u = extractYoWorldInfoImageUrl(detail, entry.id);
@@ -394,6 +527,135 @@ async function apiItemDetail(id){
   const json = await res.json();
   return json?.data?.item || null;
 }
+
+function firstUrlFromText(text){
+  const s = String(text || '');
+  const m = s.match(/https?:\/\/[^\s"'<>]+/i);
+  return m ? m[0] : '';
+}
+
+function extractItemIdFromUrl(url){
+  const u = String(url || '').trim();
+  if(!u) return 0;
+
+  // api.yoworld.info item endpoint
+  let m = u.match(/api\.yoworld\.info\/api\/items\/(\d+)/i);
+  if(m) return Number(m[1]) || 0;
+
+  // yoworld.info item pages commonly include an ID in the path
+  m = u.match(/yoworld\.info\/(?:item|items)\/(\d+)/i);
+  if(m) return Number(m[1]) || 0;
+
+  // Sometimes it's a slug with an ID in it
+  m = u.match(/yoworld\.info\/[^\s\/]+\/(\d+)[^\s\/]*$/i);
+  if(m) return Number(m[1]) || 0;
+
+  // CDN URL ends with /<id>/<id>.png
+  m = u.match(/\/cdn\/items\/[0-9]{2}\/[0-9]{2}\/(\d+)\/(\d+)\.png/i);
+  if(m) return Number(m[2] || m[1]) || 0;
+
+  // Fallback: first long-ish number in URL
+  m = u.match(/\b(\d{4,})\b/);
+  if(m) return Number(m[1]) || 0;
+  return 0;
+}
+
+async function addItemById(section, itemId, note){
+  const id = Number(itemId);
+  if(!Number.isFinite(id) || id <= 0){
+    alert('Could not detect an item ID from the dropped content.');
+    return;
+  }
+
+  state[section] = state[section] || [];
+
+  // Duplicate detection
+  const existing = (state[section] || []).find(e=>String(e?.id) === String(id));
+  if(existing){
+    const n = String(note || '').trim();
+    if(n){
+      const ok = confirm('This item is already in this section. Update its note instead?');
+      if(ok){
+        existing.note = n;
+        await saveState();
+        render();
+      }
+    }else{
+      alert('Duplicate detected: this item is already in this section.');
+    }
+    return;
+  }
+
+  let activeInStore = false;
+  let fullName = '';
+  let infoImageUrl = '';
+  try{
+    const detail = await apiItemDetail(id);
+    activeInStore = !!detail?.active_in_store;
+    if(detail?.name) fullName = detail.name;
+  }catch{}
+
+  const cdnImageUrl = buildYwCdnImageUrlFromId(id);
+  infoImageUrl = yoworldInfoProxyUrlForImageUrl(cdnImageUrl);
+  const source = imageSourceFromState();
+  let chosenImageUrl = cdnImageUrl;
+  if(source === 'info'){
+    chosenImageUrl = infoImageUrl || cdnImageUrl;
+  }else if(source === 'auto'){
+    chosenImageUrl = cdnImageUrl || infoImageUrl;
+  }
+
+  const entry = {
+    key: keyFor(section, id),
+    id,
+    name: fullName || `Item ${id}`,
+    note: String(note || '').trim(),
+    imageUrl: chosenImageUrl,
+    ywCdnImageUrl: cdnImageUrl,
+    ywInfoImageUrl: infoImageUrl,
+    activeInStore,
+    addedAt: Date.now()
+  };
+
+  state[section].push(entry);
+  await saveState();
+  render();
+}
+
+function wireSidePanelDrop(){
+  const zone = $('#drop-zone');
+  if(!zone || wireSidePanelDrop._wired) return;
+  wireSidePanelDrop._wired = true;
+
+  zone.addEventListener('dragover', (e)=>{
+    e.preventDefault();
+    zone.classList.add('is-over');
+    try{ e.dataTransfer.dropEffect = 'copy'; }catch{}
+  });
+  zone.addEventListener('dragleave', ()=>zone.classList.remove('is-over'));
+  zone.addEventListener('drop', async(e)=>{
+    e.preventDefault();
+    zone.classList.remove('is-over');
+
+    let url = '';
+    try{
+      url = e.dataTransfer.getData('text/uri-list') || '';
+      if(!url) url = firstUrlFromText(e.dataTransfer.getData('text/plain'));
+      if(!url) url = firstUrlFromText(e.dataTransfer.getData('text/html'));
+    }catch{}
+
+    if(!url){
+      alert('Drop a YoWorld.info item link (URL).');
+      return;
+    }
+
+    const id = extractItemIdFromUrl(url);
+    const section = $('#in-section')?.value || getActiveTab() || 'wish';
+    const note = ($('#in-note')?.value || '').trim();
+    await addItemById(section, id, note);
+  });
+}
+wireSidePanelDrop._wired = false;
 
 function storeBadge(active){
   const span = el('span', 'badge ' + (active ? 'instore' : 'notstore'));
@@ -474,8 +736,10 @@ function renderGrid(section, root){
       }
     });
 
+    const imgWrap = el('div','imgwrap');
+
     const img = el('img');
-    img.src = item.imageUrl || '';
+    img.src = bestImageUrlForItem(item);
     img.alt = item.name || 'Item';
     img.loading = 'lazy';
     img.referrerPolicy = 'no-referrer';
@@ -483,20 +747,48 @@ function renderGrid(section, root){
       // Try to repair broken images by swapping to YoWorld.info URL.
       if(img.dataset.fallbackTried === '1') return;
       img.dataset.fallbackTried = '1';
-      const prefer = imageSourceFromState();
-      if(prefer === 'cdn'){
-        // User explicitly prefers CDN; don't auto-repair unless we already have an info URL.
-        if(!item?.ywInfoImageUrl) return;
-      }
       const fallback = await ensureInfoImageUrl(item);
-      if(!fallback) return;
-      if(item.imageUrl !== fallback){
-        item.imageUrl = fallback;
-        img.src = fallback;
+      if(fallback){
+        if(item.imageUrl !== fallback){
+          item.imageUrl = fallback;
+          img.src = fallback;
+          try{ await saveState(); }catch{}
+        }
+        return;
+      }
+
+      // As a last resort, retry derived CDN URL if we weren't already using it.
+      const cdn = buildYwCdnImageUrlFromId(item?.id);
+      if(cdn && img.src !== cdn){
+        item.imageUrl = cdn;
+        img.src = cdn;
         try{ await saveState(); }catch{}
       }
     });
-    tile.appendChild(img);
+    imgWrap.appendChild(img);
+
+    const edit = el('button','imgedit');
+    edit.type = 'button';
+    edit.title = 'Edit note/price';
+    edit.setAttribute('aria-label', 'Edit note/price');
+    edit.textContent = 'Edit';
+    edit.addEventListener('mousedown', (e)=>{
+      // Prevent drag from starting when pressing the button.
+      e.stopPropagation();
+      e.preventDefault();
+    });
+    edit.addEventListener('click', async(e)=>{
+      e.stopPropagation();
+      const current = String(item.note || '');
+      const next = prompt('Note / price (leave blank to clear):', current);
+      if(next === null) return;
+      item.note = String(next).trim();
+      await saveState();
+      render();
+    });
+    imgWrap.appendChild(edit);
+
+    tile.appendChild(imgWrap);
 
     const pad = el('div','tpad');
     const name = el('div','tname');
@@ -562,6 +854,12 @@ async function doSearch(){
       thumb.alt = it.name || 'Item';
       thumb.loading = 'lazy';
       thumb.referrerPolicy = 'no-referrer';
+      thumb.addEventListener('error', async()=>{
+        if(thumb.dataset.fallbackTried === '1') return;
+        thumb.dataset.fallbackTried = '1';
+        const u = yoworldInfoProxyUrlForImageUrl(buildYwCdnImageUrlFromId(it.id));
+        if(u) thumb.src = u;
+      });
       row.appendChild(thumb);
 
       const meta = el('div','meta');
@@ -606,12 +904,12 @@ async function doSearch(){
           const detail = await apiItemDetail(it.id);
           activeInStore = !!detail?.active_in_store;
           if(detail?.name) fullName = detail.name;
-          infoImageUrl = extractYoWorldInfoImageUrl(detail, it.id);
         }catch{
           activeInStore = false;
         }
 
         const cdnImageUrl = buildYwCdnImageUrlFromId(it.id);
+        infoImageUrl = yoworldInfoProxyUrlForImageUrl(cdnImageUrl);
         const source = imageSourceFromState();
         let chosenImageUrl = cdnImageUrl;
         if(source === 'info'){
@@ -747,6 +1045,7 @@ async function loadImage(url){
   return new Promise((resolve, reject)=>{
     const img = new Image();
     img.crossOrigin = 'anonymous';
+    img.referrerPolicy = 'no-referrer';
     img.onload = ()=>resolve(img);
     img.onerror = ()=>reject(new Error('img load fail'));
     img.src = url;
@@ -759,6 +1058,7 @@ async function canLoadImage(url, timeoutMs){
   const ms = Number.isFinite(timeoutMs) ? timeoutMs : 4500;
   return new Promise((resolve)=>{
     const img = new Image();
+    img.referrerPolicy = 'no-referrer';
     let done = false;
     const finish = (ok)=>{
       if(done) return;
@@ -785,10 +1085,208 @@ function exportSectionsForScope(scope){
 
   let s = scope;
   if(s === 'active') s = getActiveTab();
+  if(!['wish','sell','sellSets','buy','all'].includes(s)) s = 'wish';
   if(s === 'all' || !s) return all;
 
   const one = all.find(x=>x.key === s);
   return one ? [one] : all;
+}
+
+function pick(obj, keys){
+  for(const k of keys){
+    if(obj && Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
+  }
+  return undefined;
+}
+
+async function copyTextToClipboard(text){
+  const t = String(text || '');
+  if(!t) return false;
+  try{
+    if(navigator?.clipboard?.writeText){
+      await navigator.clipboard.writeText(t);
+      return true;
+    }
+  }catch{}
+
+  try{
+    const ta = document.createElement('textarea');
+    ta.value = t;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return !!ok;
+  }catch{}
+  return false;
+}
+
+function yoworldInfoItemPageUrl(itemId){
+  const id = Number(itemId);
+  if(!Number.isFinite(id) || id <= 0) return '';
+  // Best guess; even if this path differs, we still show the API-based info.
+  return `https://yoworld.info/items/${id}`;
+}
+
+async function priceCheckShowDetail(itemId){
+  const root = $('#pc-detail');
+  if(!root) return;
+  root.innerHTML = '';
+
+  const id = Number(itemId);
+  if(!Number.isFinite(id) || id <= 0){
+    root.appendChild(Object.assign(el('div','hint'), { textContent: 'Invalid item id.' }));
+    return;
+  }
+
+  let detail = null;
+  try{ detail = await apiItemDetail(id); }catch{}
+  if(!detail){
+    root.appendChild(Object.assign(el('div','hint'), { textContent: 'Could not load item details.' }));
+    return;
+  }
+
+  const name = String(pick(detail, ['name','item_name','title']) || `Item ${id}`);
+  const imgUrl = bestImageUrlForItem({ id, imageUrl: '', ywCdnImageUrl: buildYwCdnImageUrlFromId(id), ywInfoImageUrl: '' });
+  const link = yoworldInfoItemPageUrl(id);
+
+  const head = el('div');
+  head.className = 'result';
+  const img = el('img','thumb');
+  img.src = imgUrl;
+  img.alt = name;
+  img.loading = 'lazy';
+  img.referrerPolicy = 'no-referrer';
+  head.appendChild(img);
+  const meta = el('div','meta');
+  meta.appendChild(Object.assign(el('div','name'), { textContent: name }));
+  meta.appendChild(Object.assign(el('div','small'), { textContent: `ID: ${id}` }));
+  if(link){
+    const a = document.createElement('a');
+    a.href = link;
+    a.target = '_blank';
+    a.rel = 'noreferrer';
+    a.textContent = 'Open on YoWorld.info';
+    a.style.display = 'inline-block';
+    a.style.marginTop = '4px';
+    meta.appendChild(a);
+  }
+  head.appendChild(meta);
+  root.appendChild(head);
+
+  const msg = `PC: ${name} (ID ${id}) — what’s the current price?`;
+
+  const box = el('div');
+  box.className = 'row';
+  box.style.marginTop = '10px';
+  const lbl = el('div','lbl');
+  lbl.textContent = 'Copy message';
+  box.appendChild(lbl);
+
+  const ta = document.createElement('textarea');
+  ta.value = msg;
+  ta.rows = 3;
+  ta.style.width = '100%';
+  ta.style.resize = 'vertical';
+  ta.style.padding = '8px';
+  ta.style.borderRadius = '10px';
+  ta.style.border = '1px solid var(--border)';
+  ta.style.background = 'var(--surface)';
+  ta.style.color = 'var(--text)';
+  box.appendChild(ta);
+
+  const actions = el('div','inline');
+  actions.style.marginTop = '8px';
+  const copyBtn = el('button');
+  copyBtn.type = 'button';
+  copyBtn.textContent = 'Copy';
+  copyBtn.addEventListener('click', async()=>{
+    const ok = await copyTextToClipboard(ta.value);
+    if(!ok) alert('Copy failed. You can manually select and copy the text.');
+  });
+  actions.appendChild(copyBtn);
+
+  const addToNoteBtn = el('button');
+  addToNoteBtn.type = 'button';
+  addToNoteBtn.textContent = 'Use as note';
+  addToNoteBtn.title = 'Copies the message into the Note box in the Add item section.';
+  addToNoteBtn.addEventListener('click', ()=>{
+    const n = $('#in-note');
+    if(n) n.value = ta.value;
+  });
+  actions.appendChild(addToNoteBtn);
+  box.appendChild(actions);
+
+  root.appendChild(box);
+}
+
+async function priceCheckSearch(){
+  const q = ($('#pc-query')?.value || '').trim();
+  const resultsRoot = $('#pc-results');
+  const detailRoot = $('#pc-detail');
+  if(resultsRoot) resultsRoot.innerHTML = '';
+  if(detailRoot) detailRoot.innerHTML = '<div class="hint">Select an item to view details.</div>';
+
+  if(!q){
+    resultsRoot?.appendChild(Object.assign(el('div','hint'), { textContent: 'Type a search term or paste an item link/ID.' }));
+    return;
+  }
+
+  // If the user pasted an ID or URL, go straight to detail.
+  const fromUrl = extractItemIdFromUrl(q);
+  const fromNum = Number(q);
+  const id = (fromUrl > 0) ? fromUrl : (Number.isFinite(fromNum) ? fromNum : 0);
+  if(id > 0){
+    await priceCheckShowDetail(id);
+    return;
+  }
+
+  try{
+    const items = await apiSearch(q);
+    if(!items.length){
+      resultsRoot?.appendChild(Object.assign(el('div','hint'), { textContent: 'No results.' }));
+      return;
+    }
+
+    for(const it of items){
+      const row = el('div','result');
+      const thumb = el('img','thumb');
+      thumb.src = buildYwCdnImageUrlFromId(it.id);
+      thumb.alt = it.name || 'Item';
+      thumb.loading = 'lazy';
+      thumb.referrerPolicy = 'no-referrer';
+      thumb.addEventListener('error', async()=>{
+        if(thumb.dataset.fallbackTried === '1') return;
+        thumb.dataset.fallbackTried = '1';
+        try{
+          const detail = await apiItemDetail(it.id);
+          const u = extractYoWorldInfoImageUrl(detail, it.id);
+          if(u) thumb.src = u;
+        }catch{}
+      });
+      row.appendChild(thumb);
+
+      const meta = el('div','meta');
+      meta.appendChild(Object.assign(el('div','name'), { textContent: it.name || '(Unnamed)' }));
+      meta.appendChild(Object.assign(el('div','small'), { textContent: `ID: ${it.id}` }));
+      row.appendChild(meta);
+
+      const btn = el('button');
+      btn.type = 'button';
+      btn.textContent = 'Check';
+      btn.addEventListener('click', ()=>priceCheckShowDetail(it.id));
+      row.appendChild(btn);
+
+      resultsRoot?.appendChild(row);
+    }
+  }catch(e){
+    console.error(e);
+    resultsRoot?.appendChild(Object.assign(el('div','hint'), { textContent: 'Price check search failed.' }));
+  }
 }
 
 async function exportPng(scope){
@@ -800,12 +1298,17 @@ async function exportPng(scope){
   const pal = exportPalette(theme);
 
   const COLS = 5;
-  const PAGE_SIZE = 20; // 5 cols x 4 rows
+  const DEFAULT_PAGE_SIZE = 20; // 5 cols x 4 rows
+  const WISH_PAGE_SIZE = 50; // 5 cols x 10 rows (single image)
   const TILE_W = 160;
   const TILE_H = 238;
   const PAD = 20;
   const GAP = 12;
   const HEADER_H = 44;
+
+  function pageSizeForSection(sectionKey){
+    return (sectionKey === 'wish') ? WISH_PAGE_SIZE : DEFAULT_PAGE_SIZE;
+  }
 
   function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 
@@ -883,7 +1386,7 @@ async function exportPng(scope){
         try{
           let img;
           try{
-            img = await loadImage(item.imageUrl);
+            img = await loadImage(bestImageUrlForItem(item));
           }catch{
             // If export hits broken CDN URLs, try YoWorld.info as fallback.
             const fallback = await ensureInfoImageUrl(item);
@@ -952,10 +1455,15 @@ async function exportPng(scope){
 
   const sections = exportSectionsForScope(scope);
   const sectionJobs = sections.map(s=>{
-    const allItems = state[s.key] || [];
+    let allItems = state[s.key] || [];
+    if(s.key === 'wish'){
+      allItems = allItems.slice(0, 50);
+    }
+
+    const pageSize = pageSizeForSection(s.key);
     const pages = [];
-    for(let i=0; i<Math.max(1, allItems.length); i += PAGE_SIZE){
-      pages.push(allItems.slice(i, i + PAGE_SIZE));
+    for(let i=0; i<Math.max(1, allItems.length); i += pageSize){
+      pages.push(allItems.slice(i, i + pageSize));
       if(allItems.length === 0) break;
     }
     return { key: s.key, title: s.title, pages };
@@ -963,7 +1471,12 @@ async function exportPng(scope){
 
   const totalDownloads = sectionJobs.reduce((sum, j)=>sum + (j.pages.length || 1), 0);
   if(totalDownloads > 1){
-    const ok = confirm(`This export will download ${totalDownloads} PNG files (20 items per image). Continue?`);
+    const ok = confirm(
+      `This export will download ${totalDownloads} PNG files.\n\n` +
+      `Wish List: up to 50 items per image\n` +
+      `Other sections: 20 items per image\n\n` +
+      `Continue?`
+    );
     if(!ok) return;
   }
 
@@ -1107,6 +1620,11 @@ document.addEventListener('DOMContentLoaded', async()=>{
   wireTabs();
   try{ render(); }catch(e){ console.error('render failed', e); }
 
+  // Side panel only: allow dropping YoWorld.info links to add items.
+  if(document.body?.dataset?.page === 'sidepanel'){
+    wireSidePanelDrop();
+  }
+
   // Persist drafts as the user types.
   $('#in-query')?.addEventListener('input', ()=>persistDraftForTab(getActiveTab()));
   $('#in-note')?.addEventListener('input', ()=>persistDraftForTab(getActiveTab()));
@@ -1131,6 +1649,7 @@ document.addEventListener('DOMContentLoaded', async()=>{
       state.settings = state.settings || {};
       state.settings.imageSource = (v === 'cdn' || v === 'info' || v === 'auto') ? v : 'cdn';
       await saveState();
+      render();
     });
   }
 
@@ -1144,6 +1663,12 @@ document.addEventListener('DOMContentLoaded', async()=>{
   $('#btn-search')?.addEventListener('click', doSearch);
   $('#in-query')?.addEventListener('keydown', (e)=>{
     if(e.key === 'Enter') doSearch();
+  });
+
+  // Price Check tab
+  $('#pc-btn-search')?.addEventListener('click', priceCheckSearch);
+  $('#pc-query')?.addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter') priceCheckSearch();
   });
 
   $('#btn-export')?.addEventListener('click', ()=>{
