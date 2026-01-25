@@ -122,14 +122,25 @@ async function openSidePanel(){
 }
 
 function wireTabs(){
-  const tabs = Array.from(document.querySelectorAll('.tab[data-tab]'));
-  tabs.forEach(t => t.addEventListener('click', ()=>setActiveTab(t.dataset.tab)));
+  // Use event delegation so tab switching keeps working even if the UI is re-rendered
+  // or if individual listeners fail to attach for any reason.
+  if(!wireTabs._delegated){
+    document.addEventListener('click', (e)=>{
+      const btn = e.target && e.target.closest ? e.target.closest('.tab[data-tab]') : null;
+      if(!btn) return;
+      const tabName = btn.dataset ? btn.dataset.tab : null;
+      if(!tabName) return;
+      setActiveTab(tabName);
+    }, true);
+    wireTabs._delegated = true;
+  }
   let initial = 'wish';
   try{ initial = localStorage.getItem(ACTIVE_TAB_KEY) || 'wish'; }catch{}
   if(!['wish','sell','sellSets','buy','settings'].includes(initial)) initial = 'wish';
   currentTab = initial;
   setActiveTab(initial);
 }
+wireTabs._delegated = false;
 
 function themeFromState(){
   const t = state?.settings?.theme;
@@ -263,12 +274,72 @@ function render(){
   renderGrid('buy', $('#grid-buy'));
 }
 
+let dragState = {
+  section: null,
+  key: null
+};
+
+function reorderByKey(section, fromKey, toKey){
+  if(!section || !fromKey || !toKey) return false;
+  const arr = state[section] || [];
+  const fromIndex = arr.findIndex(x=>x && x.key === fromKey);
+  const toIndex = arr.findIndex(x=>x && x.key === toKey);
+  if(fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return false;
+  const [moved] = arr.splice(fromIndex, 1);
+  arr.splice(toIndex, 0, moved);
+  state[section] = arr;
+  return true;
+}
+
 function renderGrid(section, root){
   if(!root) return;
   root.innerHTML = '';
   const items = state[section] || [];
   for(const item of items){
     const tile = el('div','tile');
+    tile.draggable = true;
+    tile.dataset.key = item.key;
+    tile.dataset.section = section;
+
+    tile.addEventListener('dragstart', (e)=>{
+      dragState = { section, key: item.key };
+      tile.classList.add('is-dragging');
+      try{
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', item.key);
+      }catch{}
+    });
+
+    tile.addEventListener('dragend', ()=>{
+      tile.classList.remove('is-dragging');
+      dragState = { section: null, key: null };
+      root.querySelectorAll('.tile.is-drop-target').forEach(t=>t.classList.remove('is-drop-target'));
+    });
+
+    tile.addEventListener('dragover', (e)=>{
+      if(dragState.section !== section) return;
+      if(!dragState.key || dragState.key === item.key) return;
+      e.preventDefault();
+      try{ e.dataTransfer.dropEffect = 'move'; }catch{}
+      tile.classList.add('is-drop-target');
+    });
+
+    tile.addEventListener('dragleave', ()=>{
+      tile.classList.remove('is-drop-target');
+    });
+
+    tile.addEventListener('drop', async (e)=>{
+      if(dragState.section !== section) return;
+      e.preventDefault();
+      tile.classList.remove('is-drop-target');
+      const fromKey = dragState.key;
+      const toKey = item.key;
+      if(reorderByKey(section, fromKey, toKey)){
+        await saveState();
+        render();
+      }
+    });
+
     const img = el('img');
     img.src = item.imageUrl || '';
     img.alt = item.name || 'Item';
@@ -359,7 +430,24 @@ async function doSearch(){
         const section = $('#in-section')?.value || 'wish';
         const note = ($('#in-note')?.value || '').trim();
 
-        // Fetch detail to get active_in_store + the full item name reliably.
+        state[section] = state[section] || [];
+
+        // Duplicate detection
+        const existing = (state[section] || []).find(e=>String(e?.id) === String(it.id));
+        if(existing){
+          if(note){
+            const ok = confirm('This item is already in this section. Update its note instead?');
+            if(ok){
+              existing.note = note;
+              await saveState();
+              render();
+            }
+          }else{
+            alert('Duplicate detected: this item is already in this section.');
+          }
+          return;
+        }
+
         let activeInStore = false;
         let fullName = it.name || '';
         try{
@@ -380,7 +468,6 @@ async function doSearch(){
           addedAt: Date.now()
         };
 
-        state[section] = state[section] || [];
         state[section].push(entry);
         await saveState();
         render();
@@ -527,44 +614,45 @@ async function exportPng(scope){
   const pal = exportPalette(theme);
 
   const COLS = 5;
+  const PAGE_SIZE = 20; // 5 cols x 4 rows
   const TILE_W = 160;
   const TILE_H = 238;
   const PAD = 20;
   const GAP = 12;
   const HEADER_H = 44;
 
-  const sections = exportSectionsForScope(scope);
+  function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
 
-  const sectionHeights = sections.map(s=>{
-    const n = (state[s.key]||[]).length;
-    const rows = Math.max(1, Math.ceil(n / COLS));
-    return HEADER_H + rows * TILE_H + (rows-1)*GAP + PAD;
-  });
+  async function downloadCurrentCanvas(filename){
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  }
 
-  const width = PAD*2 + COLS*TILE_W + (COLS-1)*GAP;
-  const height = PAD + sectionHeights.reduce((a,b)=>a+b,0);
+  async function renderAndDownloadSectionPage(sectionKey, title, items, pageIndex, totalPages){
+    const rows = Math.max(1, Math.ceil(items.length / COLS));
+    const width = PAD*2 + COLS*TILE_W + (COLS-1)*GAP;
+    const height = PAD + HEADER_H + rows * TILE_H + (rows-1)*GAP + PAD;
 
-  canvas.width = width;
-  canvas.height = height;
+    canvas.width = width;
+    canvas.height = height;
 
-  // Background
-  ctx.fillStyle = pal.bg;
-  ctx.fillRect(0,0,width,height);
+    // Background
+    ctx.fillStyle = pal.bg;
+    ctx.fillRect(0,0,width,height);
 
-  ctx.textBaseline = 'top';
+    ctx.textBaseline = 'top';
 
-  let y = PAD;
-
-  for(const s of sections){
     // Header
     ctx.fillStyle = pal.text;
     ctx.font = 'bold 20px system-ui, -apple-system, Segoe UI, sans-serif';
-    ctx.fillText(s.title, PAD, y);
-    y += HEADER_H;
+    ctx.fillText(title, PAD, PAD);
 
-    const items = state[s.key] || [];
-    const rows = Math.max(1, Math.ceil(items.length / COLS));
-
+    const y = PAD + HEADER_H;
     for(let r=0; r<rows; r++){
       for(let c=0; c<COLS; c++){
         const idx = r*COLS + c;
@@ -584,7 +672,7 @@ async function exportPng(scope){
         const item = items[idx];
         if(!item) continue;
 
-        // Store badge (draw first so layout stays consistent)
+        // Store badge
         const badgeText = item.activeInStore ? 'IN STORE' : 'NOT IN STORE';
         ctx.font = 'bold 15px system-ui, -apple-system, Segoe UI, sans-serif';
         const bw = ctx.measureText(badgeText).width + 16;
@@ -619,7 +707,7 @@ async function exportPng(scope){
           ctx.fill();
         }
 
-        // Price / note (centered, prominent) — fixed position
+        // Price / note
         const price = String(item.note || '').trim();
         const priceX = x + 10;
         const priceW = TILE_W - 20;
@@ -630,7 +718,7 @@ async function exportPng(scope){
           drawCenteredPillText(ctx, price, priceX, priceY, priceW, priceH, pal.priceBg, pal.priceBorder, pal.priceText);
         }
 
-        // Name — fit into the fixed space above the price pill
+        // Name
         ctx.fillStyle = pal.text;
         const nameX = x + 10;
         const nameY = ty + 126;
@@ -661,20 +749,35 @@ async function exportPng(scope){
       }
     }
 
-    y += rows*TILE_H + (rows-1)*GAP + PAD;
+    const suffix = totalPages > 1 ? `-p${pageIndex+1}` : '';
+    await downloadCurrentCanvas(`yoselection-${sectionKey}${suffix}.png`);
   }
 
-  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  if(sections.length === 1){
-    a.download = `yo-template-${sections[0].key}.png`;
-  }else{
-    a.download = 'yo-template.png';
+  const sections = exportSectionsForScope(scope);
+  const sectionJobs = sections.map(s=>{
+    const allItems = state[s.key] || [];
+    const pages = [];
+    for(let i=0; i<Math.max(1, allItems.length); i += PAGE_SIZE){
+      pages.push(allItems.slice(i, i + PAGE_SIZE));
+      if(allItems.length === 0) break;
+    }
+    return { key: s.key, title: s.title, pages };
+  });
+
+  const totalDownloads = sectionJobs.reduce((sum, j)=>sum + (j.pages.length || 1), 0);
+  if(totalDownloads > 1){
+    const ok = confirm(`This export will download ${totalDownloads} PNG files (20 items per image). Continue?`);
+    if(!ok) return;
   }
-  a.click();
-  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+
+  for(const job of sectionJobs){
+    const totalPages = job.pages.length || 1;
+    for(let pi=0; pi<totalPages; pi++){
+      const items = job.pages[pi] || [];
+      await renderAndDownloadSectionPage(job.key, job.title, items, pi, totalPages);
+      await sleep(90);
+    }
+  }
 }
 
 function roundRect(ctx, x, y, w, h, r){
@@ -767,9 +870,9 @@ async function refreshSection(section){
 document.addEventListener('DOMContentLoaded', async()=>{
   await loadState();
   applyTheme(themeFromState());
-  render();
-
+  // Wire tabs early so navigation works even if rendering hits a bad state.
   wireTabs();
+  try{ render(); }catch(e){ console.error('render failed', e); }
 
   // Persist drafts as the user types.
   $('#in-query')?.addEventListener('input', ()=>persistDraftForTab(getActiveTab()));
