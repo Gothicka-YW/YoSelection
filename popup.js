@@ -281,7 +281,7 @@ let dragState = {
 
 function reorderByKey(section, fromKey, toKey){
   if(!section || !fromKey || !toKey) return false;
-  const arr = state[section] || [];
+  const arr = (state[section] || []).slice();
   const fromIndex = arr.findIndex(x=>x && x.key === fromKey);
   const toIndex = arr.findIndex(x=>x && x.key === toKey);
   if(fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return false;
@@ -741,11 +741,14 @@ async function exportPng(scope){
         }
 
         ctx.font = `600 ${nameFontSize}px "Segoe UI", system-ui, -apple-system, sans-serif`;
+        ctx.save();
+        ctx.textAlign = 'center';
         for(let i=0; i<nameLines.length; i++){
           const yy = nameY + i * nameLineH;
           if(yy + nameLineH > nameBottom + 2) break;
-          ctx.fillText(nameLines[i], nameX, yy);
+          ctx.fillText(nameLines[i], nameX + nameW / 2, yy);
         }
+        ctx.restore();
       }
     }
 
@@ -835,13 +838,13 @@ function drawContain(ctx, img, x, y, w, h){
 
 async function clearSection(section){
   if(!confirm('Clear this section?')) return;
-  state[section] = [];
+  setList(section, []);
   await saveState();
   render();
 }
 
 async function refreshSection(section){
-  const items = state[section] || [];
+  const items = getList(section);
   if(!items.length){
     alert('Nothing to refresh in this section.');
     return;

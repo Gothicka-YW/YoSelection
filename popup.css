@@ -102,7 +102,7 @@ button:hover{background:var(--surface2)}
 .tile.is-drop-target{outline:2px dashed var(--primary); outline-offset:-4px}
 .tile img{width:100%;height:84px;object-fit:cover;background:var(--surface2)}
 .tile .tpad{padding:6px}
-.tile .tname{font-size:15px;font-weight:600;line-height:1.15}
+.tile .tname{font-size:15px;font-weight:600;line-height:1.15;text-align:center}
 .tile .tnote{font-size:14.5px;color:var(--text);margin-top:3px;min-height:14px;font-weight:600}
 .tile .trow{display:flex;justify-content:center;align-items:center;gap:6px;margin-top:6px;position:relative}
 .tile .trow .x{position:absolute;right:0}
