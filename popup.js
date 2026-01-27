@@ -20,6 +20,8 @@ function defaultState(){
 
 let state = defaultState();
 
+let lastPriceCheckItem = null;
+
 const ACTIVE_TAB_KEY = 'yo_template_active_tab_v1';
 const TAB_DRAFTS_KEY = 'yo_template_tab_drafts_v1';
 
@@ -398,8 +400,13 @@ async function saveState(){
 function buildYwCdnImageUrlFromId(itemId){
   const id = Number(itemId);
   if(!Number.isFinite(id) || id <= 0) return '';
-  const g1 = String(Math.floor(id / 10000)).padStart(2,'0');
-  const g2 = String(Math.floor((id % 10000) / 100)).padStart(2,'0');
+
+  // YoWorld CDN pathing uses the first 4 digits of the item id (zero-padded)
+  // as folder segments, e.g. 26295 -> /26/29/26295/26295.png
+  // This matches how yoworld.info constructs CDN URLs.
+  const s = String(Math.trunc(id)).padStart(4, '0');
+  const g1 = s.substring(0, 2);
+  const g2 = s.substring(2, 4);
   return `https://yw-web.yoworld.com/cdn/items/${g1}/${g2}/${id}/${id}.png`;
 }
 
@@ -542,6 +549,17 @@ function extractItemIdFromUrl(url){
   const u = String(url || '').trim();
   if(!u) return 0;
 
+  // Unwrap YoWorld.info image proxy URLs (these often wrap the CDN URL in x=...)
+  // Example: https://api.yoworld.info/extension.php?x=<encoded-cdn-url>
+  try{
+    const proxyMatch = u.match(/api\.yoworld\.info\/extension\.php\?[^\s#]*\bx=([^&\s#]+)/i);
+    if(proxyMatch && proxyMatch[1]){
+      const inner = decodeURIComponent(proxyMatch[1]);
+      const innerId = extractItemIdFromUrl(inner);
+      if(innerId) return innerId;
+    }
+  }catch{}
+
   // api.yoworld.info item endpoint
   let m = u.match(/api\.yoworld\.info\/api\/items\/(\d+)/i);
   if(m) return Number(m[1]) || 0;
@@ -556,6 +574,10 @@ function extractItemIdFromUrl(url){
 
   // CDN URL ends with /<id>/<id>.png
   m = u.match(/\/cdn\/items\/[0-9]{2}\/[0-9]{2}\/(\d+)\/(\d+)\.png/i);
+  if(m) return Number(m[2] || m[1]) || 0;
+
+  // Some CDN variants / formats
+  m = u.match(/\/cdn\/items\/[0-9]{2}\/[0-9]{2}\/(\d+)\/(\d+)\.(png|jpg|jpeg|webp)/i);
   if(m) return Number(m[2] || m[1]) || 0;
 
   // Fallback: first long-ish number in URL
@@ -841,6 +863,62 @@ async function doSearch(){
     return;
   }
 
+  // Support pasting an item link OR an image link.
+  // Even if the image URL is dead, it often contains the item ID.
+  const maybeUrl = firstUrlFromText(q) || q;
+  if(/^https?:\/\//i.test(maybeUrl)){
+    const id = extractItemIdFromUrl(maybeUrl);
+    if(id > 0){
+      const row = el('div','result');
+      const thumb = el('img','thumb');
+      thumb.src = buildYwCdnImageUrlFromId(id);
+      thumb.alt = `Item ${id}`;
+      thumb.loading = 'lazy';
+      thumb.referrerPolicy = 'no-referrer';
+      thumb.addEventListener('error', async()=>{
+        if(thumb.dataset.fallbackTried === '1') return;
+        thumb.dataset.fallbackTried = '1';
+        const u = yoworldInfoProxyUrlForImageUrl(buildYwCdnImageUrlFromId(id));
+        if(u) thumb.src = u;
+      });
+      row.appendChild(thumb);
+
+      const meta = el('div','meta');
+      const name = el('div','name');
+      name.textContent = `Item ${id}`;
+      meta.appendChild(name);
+      const small = el('div','small');
+      small.textContent = `ID: ${id}`;
+      meta.appendChild(small);
+      row.appendChild(meta);
+
+      // Try to resolve a friendly name, but don't block Add.
+      void (async()=>{
+        try{
+          const detail = await apiItemDetail(id);
+          const resolved = String(pick(detail, ['name','item_name','title']) || '').trim();
+          if(resolved){
+            name.textContent = resolved;
+            thumb.alt = resolved;
+          }
+        }catch{}
+      })();
+
+      const add = el('button');
+      add.type = 'button';
+      add.textContent = 'Add';
+      add.addEventListener('click', async()=>{
+        const section = $('#in-section')?.value || 'wish';
+        const note = ($('#in-note')?.value || '').trim();
+        await addItemById(section, id, note);
+      });
+      row.appendChild(add);
+
+      resultsRoot.appendChild(row);
+      return;
+    }
+  }
+
   try{
     const items = await apiSearch(q);
     if(!items.length){
@@ -1080,20 +1158,23 @@ async function canLoadImage(url, timeoutMs){
 }
 
 function exportSectionsForScope(scope){
-  const all = [
+  const allLists = [
     { key: 'wish', title: 'Wish List' },
     { key: 'sell', title: 'Sell' },
     { key: 'sellSets', title: 'Sell Sets' },
     { key: 'buy', title: 'Buy' }
   ];
 
+  const priceCheck = { key: 'pricecheck', title: 'Price Check' };
+
   let s = scope;
   if(s === 'active') s = getActiveTab();
-  if(!['wish','sell','sellSets','buy','all'].includes(s)) s = 'wish';
-  if(s === 'all' || !s) return all;
+  if(!['wish','sell','sellSets','buy','pricecheck','all'].includes(s)) s = 'wish';
+  if(s === 'all' || !s) return allLists;
+  if(s === 'pricecheck') return [priceCheck];
 
-  const one = all.find(x=>x.key === s);
-  return one ? [one] : all;
+  const one = allLists.find(x=>x.key === s);
+  return one ? [one] : allLists;
 }
 
 function pick(obj, keys){
@@ -1155,8 +1236,21 @@ async function priceCheckShowDetail(itemId){
   }
 
   const name = String(pick(detail, ['name','item_name','title']) || `Item ${id}`);
-  const imgUrl = bestImageUrlForItem({ id, imageUrl: '', ywCdnImageUrl: buildYwCdnImageUrlFromId(id), ywInfoImageUrl: '' });
+  const cdnImageUrl = buildYwCdnImageUrlFromId(id);
+  const infoImageUrl = yoworldInfoProxyUrlForImageUrl(cdnImageUrl);
+  const imgUrl = bestImageUrlForItem({ id, imageUrl: '', ywCdnImageUrl: cdnImageUrl, ywInfoImageUrl: infoImageUrl });
   const link = yoworldInfoItemPageUrl(id);
+
+  // Remember the last selected Price Check item so it can be exported.
+  lastPriceCheckItem = {
+    id,
+    name,
+    note: '',
+    imageUrl: imgUrl,
+    ywCdnImageUrl: cdnImageUrl,
+    ywInfoImageUrl: infoImageUrl,
+    activeInStore: !!detail?.active_in_store
+  };
 
   const head = el('div');
   head.className = 'result';
@@ -1234,6 +1328,7 @@ async function priceCheckSearch(){
   const detailRoot = $('#pc-detail');
   if(resultsRoot) resultsRoot.innerHTML = '';
   if(detailRoot) detailRoot.innerHTML = '<div class="hint">Select an item to view details.</div>';
+  lastPriceCheckItem = null;
 
   if(!q){
     resultsRoot?.appendChild(Object.assign(el('div','hint'), { textContent: 'Type a search term or paste an item link/ID.' }));
@@ -1305,12 +1400,19 @@ async function exportPng(scope){
   const DEFAULT_PAGE_SIZE = 20; // 5 cols x 4 rows
   const WISH_PAGE_SIZE = 50; // 5 cols x 10 rows (single image)
   const TILE_W = 160;
-  const TILE_H = 238;
+  const TILE_W_PRICECHECK = 320;
+  const TILE_H_DEFAULT_WITH_NOTE = 238;
+  const TILE_H_DEFAULT_NO_NOTE = 220;
+  const TILE_H_WISH_WITH_NOTE = 220;
+  const TILE_H_WISH_NO_NOTE = 200;
+  const TILE_H_PRICECHECK_WITH_NOTE = 260;
+  const TILE_H_PRICECHECK_NO_NOTE = 230;
   const PAD = 20;
   const GAP = 12;
   const HEADER_H = 44;
 
   function pageSizeForSection(sectionKey){
+    if(sectionKey === 'pricecheck') return 1;
     return (sectionKey === 'wish') ? WISH_PAGE_SIZE : DEFAULT_PAGE_SIZE;
   }
 
@@ -1327,9 +1429,19 @@ async function exportPng(scope){
   }
 
   async function renderAndDownloadSectionPage(sectionKey, title, items, pageIndex, totalPages){
-    const rows = Math.max(1, Math.ceil(items.length / COLS));
-    const width = PAD*2 + COLS*TILE_W + (COLS-1)*GAP;
-    const height = PAD + HEADER_H + rows * TILE_H + (rows-1)*GAP + PAD;
+    const pageHasAnyNote = (items || []).some(it => String(it?.note || '').trim());
+
+    const cols = (sectionKey === 'pricecheck') ? 1 : COLS;
+    const tileW = (sectionKey === 'pricecheck') ? TILE_W_PRICECHECK : TILE_W;
+
+    const rows = Math.max(1, Math.ceil(items.length / cols));
+    const width = PAD*2 + cols*tileW + (cols-1)*GAP;
+    const tileH = (sectionKey === 'wish')
+      ? (pageHasAnyNote ? TILE_H_WISH_WITH_NOTE : TILE_H_WISH_NO_NOTE)
+      : (sectionKey === 'pricecheck')
+        ? (pageHasAnyNote ? TILE_H_PRICECHECK_WITH_NOTE : TILE_H_PRICECHECK_NO_NOTE)
+      : (pageHasAnyNote ? TILE_H_DEFAULT_WITH_NOTE : TILE_H_DEFAULT_NO_NOTE);
+    const height = PAD + HEADER_H + rows * tileH + (rows-1)*GAP + PAD;
 
     canvas.width = width;
     canvas.height = height;
@@ -1347,19 +1459,19 @@ async function exportPng(scope){
 
     const y = PAD + HEADER_H;
     for(let r=0; r<rows; r++){
-      for(let c=0; c<COLS; c++){
-        const idx = r*COLS + c;
-        const x = PAD + c*(TILE_W+GAP);
-        const ty = y + r*(TILE_H+GAP);
+      for(let c=0; c<cols; c++){
+        const idx = r*cols + c;
+        const x = PAD + c*(tileW+GAP);
+        const ty = y + r*(tileH+GAP);
 
         // Tile background
         ctx.fillStyle = pal.tileBg;
-        roundRect(ctx, x, ty, TILE_W, TILE_H, 14);
+        roundRect(ctx, x, ty, tileW, tileH, 14);
         ctx.fill();
 
         ctx.strokeStyle = pal.tileBorder;
         ctx.lineWidth = 2;
-        roundRect(ctx, x, ty, TILE_W, TILE_H, 14);
+        roundRect(ctx, x, ty, tileW, tileH, 14);
         ctx.stroke();
 
         const item = items[idx];
@@ -1369,7 +1481,7 @@ async function exportPng(scope){
         const badgeText = item.activeInStore ? 'IN STORE' : 'NOT IN STORE';
         ctx.font = 'bold 15px system-ui, -apple-system, Segoe UI, sans-serif';
         const bw = ctx.measureText(badgeText).width + 16;
-        const bx = x + (TILE_W - bw) / 2;
+        const bx = x + (tileW - bw) / 2;
         const by = ty + 10;
         ctx.fillStyle = pal.badgeBg;
         roundRect(ctx, bx, by, bw, 18, 9);
@@ -1381,11 +1493,27 @@ async function exportPng(scope){
         ctx.fillStyle = pal.badgeText;
         ctx.fillText(badgeText, bx+8, by+3);
 
+        // Price / note
+        const price = String(item.note || '').trim();
+        const hasPrice = !!price;
+        const priceX = x + 10;
+        const priceW = tileW - 20;
+        const priceH = 22;
+        const priceY = ty + tileH - 10 - priceH;
+        if(price){
+          ctx.font = '800 17px "Segoe UI", system-ui, -apple-system, sans-serif';
+          drawCenteredPillText(ctx, price, priceX, priceY, priceW, priceH, pal.priceBg, pal.priceBorder, pal.priceText);
+        }
+
         // Image area (contain: do not crop)
+        // When there's no price/note (common for wish exports), expand the image area a bit
+        // so we don't end up with a large empty gap under short names.
         const imgX = x + 10;
         const imgY = ty + 34;
-        const imgW = TILE_W - 20;
-        const imgH = 88;
+        const imgW = tileW - 20;
+        const imgH = (sectionKey === 'wish')
+          ? (pageHasAnyNote ? (!hasPrice ? 110 : 88) : 104)
+          : (pageHasAnyNote ? 88 : 96);
 
         try{
           let img;
@@ -1408,31 +1536,23 @@ async function exportPng(scope){
           ctx.fill();
         }
 
-        // Price / note
-        const price = String(item.note || '').trim();
-        const priceX = x + 10;
-        const priceW = TILE_W - 20;
-        const priceH = 22;
-        const priceY = ty + TILE_H - 10 - priceH;
-        if(price){
-          ctx.font = '800 17px "Segoe UI", system-ui, -apple-system, sans-serif';
-          drawCenteredPillText(ctx, price, priceX, priceY, priceW, priceH, pal.priceBg, pal.priceBorder, pal.priceText);
-        }
-
         // Name
         ctx.fillStyle = pal.text;
         const nameX = x + 10;
-        const nameY = ty + 126;
-        const nameW = TILE_W - 20;
-        const nameBottom = (price ? (priceY - 8) : (ty + TILE_H - 10));
+        const nameY = imgY + imgH + 6;
+        const nameW = tileW - 20;
+        const nameBottom = (hasPrice ? (priceY - 8) : (ty + tileH - 10));
         const availableH = Math.max(18, nameBottom - nameY);
 
-        let nameFontSize = 17;
+        const startFontSize = (sectionKey === 'wish') ? 16 : 17;
+        const minFontSize = (sectionKey === 'wish') ? 11 : 12;
+
+        let nameFontSize = startFontSize;
         let nameLineH = 22;
         let nameLines = [];
 
-        for(let fs = 17; fs >= 12; fs--){
-          nameLineH = Math.max(18, fs + 5);
+        for(let fs = startFontSize; fs >= minFontSize; fs--){
+          nameLineH = Math.max(16, fs + 4);
           const maxLines = Math.max(1, Math.min(3, Math.floor(availableH / nameLineH)));
           ctx.font = `600 ${fs}px "Segoe UI", system-ui, -apple-system, sans-serif`;
           const wrapped = wrapLines(ctx, item.name || '', nameW, maxLines);
@@ -1444,8 +1564,16 @@ async function exportPng(scope){
         ctx.font = `600 ${nameFontSize}px "Segoe UI", system-ui, -apple-system, sans-serif`;
         ctx.save();
         ctx.textAlign = 'center';
+
+        // If there are no notes on this Wish List export page, keep the name
+        // top-aligned so the overall template can be shorter.
+        const textBlockH = nameLines.length * nameLineH;
+        const shouldBottomAlign = pageHasAnyNote;
+        const nameStartY = shouldBottomAlign
+          ? Math.max(nameY, nameBottom - textBlockH)
+          : nameY;
         for(let i=0; i<nameLines.length; i++){
-          const yy = nameY + i * nameLineH;
+          const yy = nameStartY + i * nameLineH;
           if(yy + nameLineH > nameBottom + 2) break;
           ctx.fillText(nameLines[i], nameX + nameW / 2, yy);
         }
@@ -1459,7 +1587,14 @@ async function exportPng(scope){
 
   const sections = exportSectionsForScope(scope);
   const sectionJobs = sections.map(s=>{
-    let allItems = state[s.key] || [];
+    let allItems = [];
+
+    if(s.key === 'pricecheck'){
+      allItems = lastPriceCheckItem ? [lastPriceCheckItem] : [];
+    }else{
+      allItems = state[s.key] || [];
+    }
+
     if(s.key === 'wish'){
       allItems = allItems.slice(0, 50);
     }
@@ -1474,6 +1609,10 @@ async function exportPng(scope){
   });
 
   const totalDownloads = sectionJobs.reduce((sum, j)=>sum + (j.pages.length || 1), 0);
+  if(sections.some(s=>s.key === 'pricecheck') && !lastPriceCheckItem){
+    alert('Price Check export: select an item in the Price Check tab first.');
+    return;
+  }
   if(totalDownloads > 1){
     const ok = confirm(
       `This export will download ${totalDownloads} PNG files.\n\n` +
@@ -1545,6 +1684,21 @@ function drawContain(ctx, img, x, y, w, h){
   ctx.clip();
   ctx.drawImage(img, dx, dy, dw, dh);
   ctx.restore();
+}
+
+function isKnownSection(section){
+  return section === 'wish' || section === 'sell' || section === 'sellSets' || section === 'buy';
+}
+
+function getList(section){
+  if(!isKnownSection(section)) return [];
+  const arr = state?.[section];
+  return Array.isArray(arr) ? arr : [];
+}
+
+function setList(section, items){
+  if(!isKnownSection(section)) return;
+  state[section] = Array.isArray(items) ? items : [];
 }
 
 async function clearSection(section){
