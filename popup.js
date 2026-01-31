@@ -539,6 +539,18 @@ async function apiItemDetail(id){
   return json?.data?.item || null;
 }
 
+const ITEM_DETAIL_CACHE = new Map();
+function apiItemDetailCached(id){
+  const key = String(id);
+  if(ITEM_DETAIL_CACHE.has(key)) return ITEM_DETAIL_CACHE.get(key);
+  const p = apiItemDetail(id).catch((e)=>{
+    ITEM_DETAIL_CACHE.delete(key);
+    throw e;
+  });
+  ITEM_DETAIL_CACHE.set(key, p);
+  return p;
+}
+
 function firstUrlFromText(text){
   const s = String(text || '');
   const m = s.match(/https?:\/\/[^\s"'<>]+/i);
@@ -890,16 +902,24 @@ async function doSearch(){
       const small = el('div','small');
       small.textContent = `ID: ${id}`;
       meta.appendChild(small);
+
+      const store = el('div','small');
+      store.textContent = 'In store: ...';
+      meta.appendChild(store);
       row.appendChild(meta);
 
       // Try to resolve a friendly name, but don't block Add.
       void (async()=>{
         try{
-          const detail = await apiItemDetail(id);
+          const detail = await apiItemDetailCached(id);
           const resolved = String(pick(detail, ['name','item_name','title']) || '').trim();
           if(resolved){
             name.textContent = resolved;
             thumb.alt = resolved;
+          }
+
+          if(store.isConnected){
+            store.textContent = `In store: ${detail?.active_in_store ? 'Yes' : 'No'}`;
           }
         }catch{}
       })();
@@ -952,7 +972,25 @@ async function doSearch(){
       const small = el('div','small');
       small.textContent = `ID: ${it.id}`;
       meta.appendChild(small);
+
+      const store = el('div','small');
+      store.textContent = 'In store: ...';
+      meta.appendChild(store);
       row.appendChild(meta);
+
+      // Fetch store status asynchronously so results render fast.
+      void (async()=>{
+        try{
+          const detail = await apiItemDetailCached(it.id);
+          if(store.isConnected){
+            store.textContent = `In store: ${detail?.active_in_store ? 'Yes' : 'No'}`;
+          }
+        }catch{
+          if(store.isConnected){
+            store.textContent = 'In store: No';
+          }
+        }
+      })();
 
       const add = el('button');
       add.type = 'button';
@@ -983,7 +1021,7 @@ async function doSearch(){
         let fullName = it.name || '';
         let infoImageUrl = '';
         try{
-          const detail = await apiItemDetail(it.id);
+          const detail = await apiItemDetailCached(it.id);
           activeInStore = !!detail?.active_in_store;
           if(detail?.name) fullName = detail.name;
         }catch{
