@@ -145,6 +145,73 @@ function wireTabs(){
     }, true);
     wireTabs._delegated = true;
   }
+
+  if(!wireTabs._delegatedDnD){
+    let switchTimer = 0;
+    const clearSwitchTimer = ()=>{ if(switchTimer){ clearTimeout(switchTimer); switchTimer = 0; } };
+
+    const getTabBtn = (e)=> e?.target && e.target.closest ? e.target.closest('.tab[data-tab]') : null;
+
+    document.addEventListener('dragenter', (e)=>{
+      const btn = getTabBtn(e);
+      if(!btn || !dragState?.key) return;
+      const tabName = btn.dataset ? btn.dataset.tab : null;
+      if(!tabName || !isListTab(tabName)) return;
+
+      btn.classList.add('is-drop-target');
+      e.preventDefault();
+
+      // Allow switching tabs just by hovering while dragging.
+      if(tabName !== currentTab){
+        clearSwitchTimer();
+        switchTimer = setTimeout(()=>{
+          try{ setActiveTab(tabName); }catch{}
+        }, 220);
+      }
+    }, true);
+
+    document.addEventListener('dragover', (e)=>{
+      const btn = getTabBtn(e);
+      if(!btn || !dragState?.key) return;
+      const tabName = btn.dataset ? btn.dataset.tab : null;
+      if(!tabName || !isListTab(tabName)) return;
+      e.preventDefault();
+      try{ e.dataTransfer.dropEffect = 'move'; }catch{}
+      btn.classList.add('is-drop-target');
+    }, true);
+
+    document.addEventListener('dragleave', (e)=>{
+      const btn = getTabBtn(e);
+      if(!btn) return;
+      // Only clear if we're actually leaving the button entirely.
+      const rel = e.relatedTarget;
+      if(rel && btn.contains(rel)) return;
+      btn.classList.remove('is-drop-target');
+      clearSwitchTimer();
+    }, true);
+
+    document.addEventListener('drop', async(e)=>{
+      const btn = getTabBtn(e);
+      if(!btn || !dragState?.key) return;
+      const tabName = btn.dataset ? btn.dataset.tab : null;
+      if(!tabName || !isListTab(tabName)) return;
+      e.preventDefault();
+      btn.classList.remove('is-drop-target');
+      clearSwitchTimer();
+
+      const fromSection = dragState.section;
+      const fromKey = dragState.key;
+      const toSection = tabName;
+
+      if(moveItemByKey(fromSection, fromKey, toSection, null)){
+        await saveState();
+        render();
+        try{ setActiveTab(toSection); }catch{}
+      }
+    }, true);
+
+    wireTabs._delegatedDnD = true;
+  }
   let initial = 'wish';
   try{ initial = localStorage.getItem(ACTIVE_TAB_KEY) || 'wish'; }catch{}
   if(!isKnownTab(initial)) initial = 'wish';
@@ -152,6 +219,7 @@ function wireTabs(){
   setActiveTab(initial);
 }
 wireTabs._delegated = false;
+wireTabs._delegatedDnD = false;
 
 function isKnownThemeValue(t){
   return t === 'classic' || t === 'dark' || t === 'valentine' || t === 'ocean' || t === 'forest' || t === 'sunset';
@@ -840,8 +908,73 @@ function render(){
 
 let dragState = {
   section: null,
-  key: null
+  key: null,
+  id: null
 };
+
+function moveItemByKey(fromSection, fromKey, toSection, beforeKey){
+  if(!fromSection || !fromKey || !toSection) return false;
+
+  state[fromSection] = state[fromSection] || [];
+  state[toSection] = state[toSection] || [];
+
+  if(fromSection === toSection){
+    if(beforeKey) return reorderByKey(toSection, fromKey, beforeKey);
+    const arr = (state[toSection] || []).slice();
+    const fromIndex = arr.findIndex(x=>x && x.key === fromKey);
+    if(fromIndex < 0) return false;
+    const [moved] = arr.splice(fromIndex, 1);
+    arr.push(moved);
+    state[toSection] = arr;
+    return true;
+  }
+
+  const fromArr = state[fromSection] || [];
+  const fromIndex = fromArr.findIndex(x=>x && x.key === fromKey);
+  if(fromIndex < 0) return false;
+  const moved = fromArr[fromIndex];
+  if(!moved) return false;
+
+  // Prevent duplicates in the destination section (by item id).
+  const toArr = state[toSection] || [];
+  const dup = toArr.find(x=>x && String(x.id) === String(moved.id));
+  if(dup){
+    const srcNote = String(moved.note || '').trim();
+    const dstNote = String(dup.note || '').trim();
+    const wantsNote = srcNote && (!dstNote || srcNote !== dstNote);
+
+    const msg = wantsNote
+      ? 'That section already has this item.\n\nUpdate the existing item\'s note with the one you\'re moving, and remove it from the source section?'
+      : 'That section already has this item.\n\nRemove it from the source section anyway?';
+    const ok = confirm(msg);
+    if(!ok) return false;
+
+    if(wantsNote){
+      dup.note = srcNote;
+    }
+
+    // Remove from source only.
+    state[fromSection] = fromArr.filter(x=>x && x.key !== fromKey);
+    return true;
+  }
+
+  // Remove from source.
+  const newFrom = fromArr.slice();
+  newFrom.splice(fromIndex, 1);
+  state[fromSection] = newFrom;
+
+  // Insert into destination.
+  const newTo = toArr.slice();
+  if(beforeKey){
+    const toIndex = newTo.findIndex(x=>x && x.key === beforeKey);
+    if(toIndex >= 0) newTo.splice(toIndex, 0, moved);
+    else newTo.push(moved);
+  }else{
+    newTo.push(moved);
+  }
+  state[toSection] = newTo;
+  return true;
+}
 
 function reorderByKey(section, fromKey, toKey){
   if(!section || !fromKey || !toKey) return false;
@@ -857,6 +990,42 @@ function reorderByKey(section, fromKey, toKey){
 
 function renderGrid(section, root){
   if(!root) return;
+  root.dataset.section = section;
+
+  if(!root._wiredDnD){
+    root.addEventListener('dragover', (e)=>{
+      if(!dragState?.key) return;
+      // If we're over a tile, let the tile-level handler control insert position.
+      const overTile = e.target && e.target.closest ? e.target.closest('.tile') : null;
+      if(overTile) return;
+      e.preventDefault();
+      try{ e.dataTransfer.dropEffect = 'move'; }catch{}
+      root.classList.add('is-drop-target');
+    });
+    root.addEventListener('dragleave', (e)=>{
+      const rel = e.relatedTarget;
+      if(rel && root.contains(rel)) return;
+      root.classList.remove('is-drop-target');
+    });
+    root.addEventListener('drop', async(e)=>{
+      if(!dragState?.key) return;
+      // If the drop happened on a tile (or child of a tile), let the tile handler run.
+      const onTile = e.target && e.target.closest ? e.target.closest('.tile') : null;
+      if(onTile) return;
+      e.preventDefault();
+      root.classList.remove('is-drop-target');
+
+      const fromSection = dragState.section;
+      const fromKey = dragState.key;
+      const toSection = section;
+      if(moveItemByKey(fromSection, fromKey, toSection, null)){
+        await saveState();
+        render();
+      }
+    });
+    root._wiredDnD = true;
+  }
+
   root.innerHTML = '';
   const items = state[section] || [];
   for(const item of items){
@@ -866,24 +1035,28 @@ function renderGrid(section, root){
     tile.dataset.section = section;
 
     tile.addEventListener('dragstart', (e)=>{
-      dragState = { section, key: item.key };
+      dragState = { section, key: item.key, id: item.id };
       tile.classList.add('is-dragging');
       try{
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', item.key);
+        e.dataTransfer.setData('application/x-yoselection-item', JSON.stringify({ section, key: item.key, id: item.id }));
       }catch{}
     });
 
     tile.addEventListener('dragend', ()=>{
       tile.classList.remove('is-dragging');
-      dragState = { section: null, key: null };
+      dragState = { section: null, key: null, id: null };
       root.querySelectorAll('.tile.is-drop-target').forEach(t=>t.classList.remove('is-drop-target'));
+      root.classList.remove('is-drop-target');
+      document.querySelectorAll('.tab.is-drop-target').forEach(t=>t.classList.remove('is-drop-target'));
     });
 
     tile.addEventListener('dragover', (e)=>{
-      if(dragState.section !== section) return;
-      if(!dragState.key || dragState.key === item.key) return;
+      if(!dragState.key) return;
+      if(dragState.section === section && dragState.key === item.key) return;
       e.preventDefault();
+      e.stopPropagation();
       try{ e.dataTransfer.dropEffect = 'move'; }catch{}
       tile.classList.add('is-drop-target');
     });
@@ -893,12 +1066,17 @@ function renderGrid(section, root){
     });
 
     tile.addEventListener('drop', async (e)=>{
-      if(dragState.section !== section) return;
+      if(!dragState.key) return;
       e.preventDefault();
+      e.stopPropagation();
       tile.classList.remove('is-drop-target');
       const fromKey = dragState.key;
       const toKey = item.key;
-      if(reorderByKey(section, fromKey, toKey)){
+      const fromSection = dragState.section;
+      const toSection = section;
+
+      const changed = moveItemByKey(fromSection, fromKey, toSection, toKey);
+      if(changed){
         await saveState();
         render();
       }
@@ -1708,11 +1886,16 @@ async function exportPng(scope){
   const TILE_W = 160;
   const TILE_H_DEFAULT_WITH_NOTE = 238;
   const TILE_H_DEFAULT_NO_NOTE = 220;
-  const TILE_H_WISH_WITH_NOTE = 220;
-  const TILE_H_WISH_NO_NOTE = 200;
-  const PAD = 20;
-  const GAP = 12;
-  const HEADER_H = 44;
+
+  // Wish List export: tighter spacing + slightly smaller fonts (readable for forum posts)
+  const TILE_H_WISH_WITH_NOTE = 210;
+  const TILE_H_WISH_NO_NOTE = 190;
+  const PAD_DEFAULT = 20;
+  const GAP_DEFAULT = 12;
+  const HEADER_H_DEFAULT = 44;
+  const PAD_WISH = 14;
+  const GAP_WISH = 8;
+  const HEADER_H_WISH = 34;
 
   function pageSizeForSection(sectionKey){
     return (sectionKey === 'wish' || sectionKey === 'pricecheck') ? WISH_PAGE_SIZE : DEFAULT_PAGE_SIZE;
@@ -1733,15 +1916,22 @@ async function exportPng(scope){
   async function renderAndDownloadSectionPage(sectionKey, title, items, pageIndex, totalPages){
     const pageHasAnyNote = (items || []).some(it => String(it?.note || '').trim());
 
+    const isWish = sectionKey === 'wish';
+    const isPriceCheck = sectionKey === 'pricecheck';
+
     const cols = COLS;
     const tileW = TILE_W;
 
+    const pagePad = isWish ? PAD_WISH : PAD_DEFAULT;
+    const pageGap = isWish ? GAP_WISH : GAP_DEFAULT;
+    const headerH = isWish ? HEADER_H_WISH : HEADER_H_DEFAULT;
+
     const rows = Math.max(1, Math.ceil(items.length / cols));
-    const width = PAD*2 + cols*tileW + (cols-1)*GAP;
-    const tileH = (sectionKey === 'wish' || sectionKey === 'pricecheck')
+    const width = pagePad*2 + cols*tileW + (cols-1)*pageGap;
+    const tileH = isWish
       ? (pageHasAnyNote ? TILE_H_WISH_WITH_NOTE : TILE_H_WISH_NO_NOTE)
       : (pageHasAnyNote ? TILE_H_DEFAULT_WITH_NOTE : TILE_H_DEFAULT_NO_NOTE);
-    const height = PAD + HEADER_H + rows * tileH + (rows-1)*GAP + PAD;
+    const height = pagePad + headerH + rows * tileH + (rows-1)*pageGap + pagePad;
 
     canvas.width = width;
     canvas.height = height;
@@ -1754,24 +1944,28 @@ async function exportPng(scope){
 
     // Header
     ctx.fillStyle = pal.text;
-    ctx.font = 'bold 20px system-ui, -apple-system, Segoe UI, sans-serif';
-    ctx.fillText(title, PAD, PAD);
+    ctx.font = isWish
+      ? 'bold 18px system-ui, -apple-system, Segoe UI, sans-serif'
+      : 'bold 20px system-ui, -apple-system, Segoe UI, sans-serif';
+    ctx.fillText(title, pagePad, pagePad);
 
-    const y = PAD + HEADER_H;
+    const y = pagePad + headerH;
     for(let r=0; r<rows; r++){
       for(let c=0; c<cols; c++){
         const idx = r*cols + c;
-        const x = PAD + c*(tileW+GAP);
-        const ty = y + r*(tileH+GAP);
+        const x = pagePad + c*(tileW+pageGap);
+        const ty = y + r*(tileH+pageGap);
+
+        const innerPad = isWish ? 8 : 10;
 
         // Tile background
         ctx.fillStyle = pal.tileBg;
-        roundRect(ctx, x, ty, tileW, tileH, 14);
+        roundRect(ctx, x, ty, tileW, tileH, isWish ? 12 : 14);
         ctx.fill();
 
         ctx.strokeStyle = pal.tileBorder;
         ctx.lineWidth = 2;
-        roundRect(ctx, x, ty, tileW, tileH, 14);
+        roundRect(ctx, x, ty, tileW, tileH, isWish ? 12 : 14);
         ctx.stroke();
 
         const item = items[idx];
@@ -1779,10 +1973,12 @@ async function exportPng(scope){
 
         // Store badge
         const badgeText = item.activeInStore ? 'IN STORE' : 'NOT IN STORE';
-        ctx.font = 'bold 15px system-ui, -apple-system, Segoe UI, sans-serif';
-        const bw = ctx.measureText(badgeText).width + 16;
+        ctx.font = isWish
+          ? 'bold 13px system-ui, -apple-system, Segoe UI, sans-serif'
+          : 'bold 15px system-ui, -apple-system, Segoe UI, sans-serif';
+        const bw = ctx.measureText(badgeText).width + (isWish ? 14 : 16);
         const bx = x + (tileW - bw) / 2;
-        const by = ty + 10;
+        const by = ty + (isWish ? 8 : 10);
         ctx.fillStyle = pal.badgeBg;
         roundRect(ctx, bx, by, bw, 18, 9);
         ctx.fill();
@@ -1791,29 +1987,33 @@ async function exportPng(scope){
         roundRect(ctx, bx, by, bw, 18, 9);
         ctx.stroke();
         ctx.fillStyle = pal.badgeText;
-        ctx.fillText(badgeText, bx+8, by+3);
+        ctx.fillText(badgeText, bx + (isWish ? 7 : 8), by + 3);
 
         // Price / note
         const price = String(item.note || '').trim();
         const hasPrice = !!price;
-        const priceX = x + 10;
-        const priceW = tileW - 20;
-        const priceH = 22;
-        const priceY = ty + tileH - 10 - priceH;
+        const priceX = x + innerPad;
+        const priceW = tileW - innerPad*2;
+        const priceH = isWish ? 20 : 22;
+        const priceY = ty + tileH - innerPad - priceH;
         if(price){
-          ctx.font = '800 17px "Segoe UI", system-ui, -apple-system, sans-serif';
+          ctx.font = isWish
+            ? '800 15px "Segoe UI", system-ui, -apple-system, sans-serif'
+            : '800 17px "Segoe UI", system-ui, -apple-system, sans-serif';
           drawCenteredPillText(ctx, price, priceX, priceY, priceW, priceH, pal.priceBg, pal.priceBorder, pal.priceText);
         }
 
         // Image area (contain: do not crop)
         // When there's no price/note (common for wish exports), expand the image area a bit
         // so we don't end up with a large empty gap under short names.
-        const imgX = x + 10;
-        const imgY = ty + 34;
-        const imgW = tileW - 20;
-        const imgH = (sectionKey === 'wish' || sectionKey === 'pricecheck')
-          ? (pageHasAnyNote ? (!hasPrice ? 110 : 88) : 104)
-          : (pageHasAnyNote ? 88 : 96);
+        const imgX = x + innerPad;
+        const imgY = ty + (isWish ? 30 : 34);
+        const imgW = tileW - innerPad*2;
+        const imgH = isWish
+          ? (pageHasAnyNote ? (!hasPrice ? 104 : 84) : 96)
+          : (isPriceCheck
+            ? (pageHasAnyNote ? (!hasPrice ? 110 : 88) : 104)
+            : (pageHasAnyNote ? 88 : 96));
 
         try{
           let img;
@@ -1858,21 +2058,21 @@ async function exportPng(scope){
 
         // Name
         ctx.fillStyle = pal.text;
-        const nameX = x + 10;
-        const nameY = imgY + imgH + 6;
-        const nameW = tileW - 20;
-        const nameBottom = (hasPrice ? (priceY - 8) : (ty + tileH - 10));
+        const nameX = x + innerPad;
+        const nameY = imgY + imgH + (isWish ? 4 : 6);
+        const nameW = tileW - innerPad*2;
+        const nameBottom = (hasPrice ? (priceY - 8) : (ty + tileH - innerPad));
         const availableH = Math.max(18, nameBottom - nameY);
 
-        const startFontSize = (sectionKey === 'wish' || sectionKey === 'pricecheck') ? 16 : 17;
-        const minFontSize = (sectionKey === 'wish' || sectionKey === 'pricecheck') ? 11 : 12;
+        const startFontSize = isWish ? 15 : (isPriceCheck ? 16 : 17);
+        const minFontSize = isWish ? 10 : (isPriceCheck ? 11 : 12);
 
         let nameFontSize = startFontSize;
         let nameLineH = 22;
         let nameLines = [];
 
         for(let fs = startFontSize; fs >= minFontSize; fs--){
-          nameLineH = Math.max(16, fs + 4);
+          nameLineH = Math.max(14, fs + (isWish ? 3 : 4));
           const maxLines = Math.max(1, Math.min(3, Math.floor(availableH / nameLineH)));
           ctx.font = `600 ${fs}px "Segoe UI", system-ui, -apple-system, sans-serif`;
           const wrapped = wrapLines(ctx, item.name || '', nameW, maxLines);
