@@ -11,6 +11,7 @@ function defaultState(){
     sell: [],
     sellSets: [],
     buy: [],
+    pricecheck: [],
     settings: {
       theme: 'classic',
       imageSource: 'cdn' // 'cdn' | 'info' | 'auto'
@@ -40,7 +41,7 @@ function saveTabDrafts(drafts){
 }
 
 function isListTab(tabName){
-  return tabName === 'wish' || tabName === 'sell' || tabName === 'sellSets' || tabName === 'buy';
+  return tabName === 'wish' || tabName === 'sell' || tabName === 'sellSets' || tabName === 'buy' || tabName === 'pricecheck';
 }
 
 function isKnownTab(tabName){
@@ -151,9 +152,13 @@ function wireTabs(){
 }
 wireTabs._delegated = false;
 
+function isKnownThemeValue(t){
+  return t === 'classic' || t === 'dark' || t === 'valentine' || t === 'ocean' || t === 'forest' || t === 'sunset';
+}
+
 function themeFromState(){
   const t = state?.settings?.theme;
-  return (t === 'classic' || t === 'dark' || t === 'valentine') ? t : 'classic';
+  return isKnownThemeValue(t) ? t : 'classic';
 }
 
 function imageSourceFromState(){
@@ -171,10 +176,9 @@ function normalizeImportedState(maybe){
     sell: Array.isArray(s.sell) ? s.sell : [],
     sellSets: Array.isArray(s.sellSets) ? s.sellSets : [],
     buy: Array.isArray(s.buy) ? s.buy : [],
+    pricecheck: Array.isArray(s.pricecheck) ? s.pricecheck : [],
     settings: {
-      theme: (s?.settings?.theme === 'classic' || s?.settings?.theme === 'dark' || s?.settings?.theme === 'valentine')
-        ? s.settings.theme
-        : 'classic',
+      theme: isKnownThemeValue(s?.settings?.theme) ? s.settings.theme : 'classic',
       imageSource: (s?.settings?.imageSource === 'cdn' || s?.settings?.imageSource === 'info' || s?.settings?.imageSource === 'auto')
         ? s.settings.imageSource
         : 'cdn'
@@ -224,7 +228,7 @@ async function importBackupJsonFromFile(file){
 
   const next = normalizeImportedState(parsed);
 
-  const count = (next.wish.length + next.sell.length + next.sellSets.length + next.buy.length);
+  const count = (next.wish.length + next.sell.length + next.sellSets.length + next.buy.length + next.pricecheck.length);
   const ok = confirm(`Import backup and replace your current saved data?\n\nItems in backup: ${count}`);
   if(!ok) return;
 
@@ -288,6 +292,60 @@ function exportPalette(theme){
     };
   }
 
+  if(theme === 'ocean'){
+    return {
+      bg: '#ecfeff',
+      tileBg: '#ffffff',
+      tileBorder: '#a5f3fc',
+      text: '#0f172a',
+      muted: '#475569',
+      imgFallback: '#cffafe',
+      badgeBg: '#cffafe',
+      badgeBorder: '#0891b2',
+      badgeBorderAlt: '#ef4444',
+      badgeText: '#0f172a',
+      priceBg: '#cffafe',
+      priceBorder: '#0891b2',
+      priceText: '#0f172a'
+    };
+  }
+
+  if(theme === 'forest'){
+    return {
+      bg: '#f0fdf4',
+      tileBg: '#ffffff',
+      tileBorder: '#bbf7d0',
+      text: '#052e16',
+      muted: '#166534',
+      imgFallback: '#dcfce7',
+      badgeBg: '#dcfce7',
+      badgeBorder: '#16a34a',
+      badgeBorderAlt: '#ef4444',
+      badgeText: '#052e16',
+      priceBg: '#dcfce7',
+      priceBorder: '#16a34a',
+      priceText: '#052e16'
+    };
+  }
+
+  if(theme === 'sunset'){
+    return {
+      bg: '#fff7ed',
+      tileBg: '#ffffff',
+      tileBorder: '#fed7aa',
+      text: '#1f2937',
+      muted: '#6b7280',
+      imgFallback: '#ffedd5',
+      badgeBg: '#ffedd5',
+      badgeBorder: '#f97316',
+      badgeBorderAlt: '#ef4444',
+      badgeText: '#1f2937',
+      priceBg: '#ffedd5',
+      priceBorder: '#f97316',
+      priceText: '#1f2937'
+    };
+  }
+
   // classic
   return {
     bg: '#ffffff',
@@ -313,10 +371,9 @@ function normalizeStateFromStorage(maybe){
     sell: Array.isArray(s.sell) ? s.sell : [],
     sellSets: Array.isArray(s.sellSets) ? s.sellSets : [],
     buy: Array.isArray(s.buy) ? s.buy : [],
+    pricecheck: Array.isArray(s.pricecheck) ? s.pricecheck : [],
     settings: {
-      theme: (s?.settings?.theme === 'classic' || s?.settings?.theme === 'dark' || s?.settings?.theme === 'valentine')
-        ? s.settings.theme
-        : 'classic',
+      theme: isKnownThemeValue(s?.settings?.theme) ? s.settings.theme : 'classic',
       imageSource: (s?.settings?.imageSource === 'cdn' || s?.settings?.imageSource === 'info' || s?.settings?.imageSource === 'auto')
         ? s.settings.imageSource
         : 'cdn'
@@ -326,7 +383,7 @@ function normalizeStateFromStorage(maybe){
 
 function countItemsInState(s){
   if(!s) return 0;
-  return (Number(s?.wish?.length) || 0) + (Number(s?.sell?.length) || 0) + (Number(s?.sellSets?.length) || 0) + (Number(s?.buy?.length) || 0);
+  return (Number(s?.wish?.length) || 0) + (Number(s?.sell?.length) || 0) + (Number(s?.sellSets?.length) || 0) + (Number(s?.buy?.length) || 0) + (Number(s?.pricecheck?.length) || 0);
 }
 
 function storageGet(area, key){
@@ -383,6 +440,7 @@ async function loadState(){
     sell: listState.sell,
     sellSets: listState.sellSets,
     buy: listState.buy,
+    pricecheck: listState.pricecheck,
     settings: haveSyncedSettings ? syncedSettingsOnly : listState.settings
   };
 }
@@ -706,6 +764,7 @@ function render(){
   renderGrid('sell', $('#grid-sell'));
   renderGrid('sellSets', $('#grid-sellSets'));
   renderGrid('buy', $('#grid-buy'));
+  renderGrid('pricecheck', $('#grid-pricecheck'));
 }
 
 let dragState = {
@@ -862,6 +921,51 @@ function keyFor(section, id){
   return `${section}:${id}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2,7)}`;
 }
 
+function clearAddItemFields(){
+  const q = $('#in-query');
+  const n = $('#in-note');
+  const r = $('#results');
+  if(q) q.value = '';
+  if(n) n.value = '';
+  if(r) r.innerHTML = '';
+  persistDraftForTab(getActiveTab());
+}
+
+function clearPriceCheckFields(){
+  const q = $('#pc-query');
+  if(q) q.value = '';
+}
+
+async function tryQuickAddFromAddItemInputs(){
+  const raw = ($('#in-query')?.value || '').trim();
+  if(!raw) return false;
+
+  const maybeUrl = firstUrlFromText(raw) || raw;
+  const idFromUrl = /^https?:\/\//i.test(maybeUrl) ? extractItemIdFromUrl(maybeUrl) : 0;
+  const fromNum = Number(raw);
+  const id = (idFromUrl > 0) ? idFromUrl : (Number.isFinite(fromNum) ? fromNum : 0);
+  if(!(id > 0)) return false;
+
+  const section = $('#in-section')?.value || getActiveTab() || 'wish';
+  const note = ($('#in-note')?.value || '').trim();
+  await addItemById(section, id, note);
+  clearAddItemFields();
+  return true;
+}
+
+async function tryQuickAddFromPriceCheckInputs(){
+  const raw = ($('#pc-query')?.value || '').trim();
+  if(!raw) return false;
+  const fromUrl = extractItemIdFromUrl(raw);
+  const fromNum = Number(raw);
+  const id = (fromUrl > 0) ? fromUrl : (Number.isFinite(fromNum) ? fromNum : 0);
+  if(!(id > 0)) return false;
+
+  await addItemById('pricecheck', id, '');
+  clearPriceCheckFields();
+  return true;
+}
+
 async function doSearch(){
   const q = ($('#in-query')?.value || '').trim();
   const resultsRoot = $('#results');
@@ -931,6 +1035,7 @@ async function doSearch(){
         const section = $('#in-section')?.value || 'wish';
         const note = ($('#in-note')?.value || '').trim();
         await addItemById(section, id, note);
+        clearAddItemFields();
       });
       row.appendChild(add);
 
@@ -1053,6 +1158,7 @@ async function doSearch(){
         state[section].push(entry);
         await saveState();
         render();
+        clearAddItemFields();
       });
       row.appendChild(add);
 
@@ -1199,17 +1305,15 @@ function exportSectionsForScope(scope){
   const allLists = [
     { key: 'wish', title: 'Wish List' },
     { key: 'sell', title: 'Sell' },
-    { key: 'sellSets', title: 'Sell Sets' },
-    { key: 'buy', title: 'Buy' }
+    { key: 'sellSets', title: 'Sets' },
+    { key: 'buy', title: 'Buy' },
+    { key: 'pricecheck', title: 'Price Check' }
   ];
-
-  const priceCheck = { key: 'pricecheck', title: 'Price Check' };
 
   let s = scope;
   if(s === 'active') s = getActiveTab();
   if(!['wish','sell','sellSets','buy','pricecheck','all'].includes(s)) s = 'wish';
   if(s === 'all' || !s) return allLists;
-  if(s === 'pricecheck') return [priceCheck];
 
   const one = allLists.find(x=>x.key === s);
   return one ? [one] : allLists;
@@ -1279,7 +1383,7 @@ async function priceCheckShowDetail(itemId){
   const imgUrl = bestImageUrlForItem({ id, imageUrl: '', ywCdnImageUrl: cdnImageUrl, ywInfoImageUrl: infoImageUrl });
   const link = yoworldInfoItemPageUrl(id);
 
-  // Remember the last selected Price Check item so it can be exported.
+  // Remember last selected item (used as a convenience; not required for exporting).
   lastPriceCheckItem = {
     id,
     name,
@@ -1313,6 +1417,41 @@ async function priceCheckShowDetail(itemId){
   }
   head.appendChild(meta);
   root.appendChild(head);
+
+  // Quick action: save this item to the Price Check list (works like Wish List).
+  {
+    const actionsRow = el('div','inline');
+    actionsRow.style.marginTop = '8px';
+    const addBtn = el('button');
+    addBtn.type = 'button';
+    addBtn.textContent = 'Add to Price Check list';
+    addBtn.addEventListener('click', async()=>{
+      state.pricecheck = state.pricecheck || [];
+      const existing = (state.pricecheck || []).find(e=>String(e?.id) === String(id));
+      if(existing){
+        alert('Already in your Price Check list.');
+        return;
+      }
+
+      const entry = {
+        key: keyFor('pricecheck', id),
+        id,
+        name,
+        note: '',
+        imageUrl: imgUrl,
+        ywCdnImageUrl: cdnImageUrl,
+        ywInfoImageUrl: infoImageUrl,
+        activeInStore: !!detail?.active_in_store,
+        addedAt: Date.now()
+      };
+      state.pricecheck.push(entry);
+      await saveState();
+      render();
+      setActiveTab('pricecheck');
+    });
+    actionsRow.appendChild(addBtn);
+    root.appendChild(actionsRow);
+  }
 
   const msg = `PC: ${name} (ID ${id}) — what’s the current price?`;
 
@@ -1438,20 +1577,16 @@ async function exportPng(scope){
   const DEFAULT_PAGE_SIZE = 20; // 5 cols x 4 rows
   const WISH_PAGE_SIZE = 50; // 5 cols x 10 rows (single image)
   const TILE_W = 160;
-  const TILE_W_PRICECHECK = 320;
   const TILE_H_DEFAULT_WITH_NOTE = 238;
   const TILE_H_DEFAULT_NO_NOTE = 220;
   const TILE_H_WISH_WITH_NOTE = 220;
   const TILE_H_WISH_NO_NOTE = 200;
-  const TILE_H_PRICECHECK_WITH_NOTE = 260;
-  const TILE_H_PRICECHECK_NO_NOTE = 230;
   const PAD = 20;
   const GAP = 12;
   const HEADER_H = 44;
 
   function pageSizeForSection(sectionKey){
-    if(sectionKey === 'pricecheck') return 1;
-    return (sectionKey === 'wish') ? WISH_PAGE_SIZE : DEFAULT_PAGE_SIZE;
+    return (sectionKey === 'wish' || sectionKey === 'pricecheck') ? WISH_PAGE_SIZE : DEFAULT_PAGE_SIZE;
   }
 
   function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
@@ -1469,15 +1604,13 @@ async function exportPng(scope){
   async function renderAndDownloadSectionPage(sectionKey, title, items, pageIndex, totalPages){
     const pageHasAnyNote = (items || []).some(it => String(it?.note || '').trim());
 
-    const cols = (sectionKey === 'pricecheck') ? 1 : COLS;
-    const tileW = (sectionKey === 'pricecheck') ? TILE_W_PRICECHECK : TILE_W;
+    const cols = COLS;
+    const tileW = TILE_W;
 
     const rows = Math.max(1, Math.ceil(items.length / cols));
     const width = PAD*2 + cols*tileW + (cols-1)*GAP;
-    const tileH = (sectionKey === 'wish')
+    const tileH = (sectionKey === 'wish' || sectionKey === 'pricecheck')
       ? (pageHasAnyNote ? TILE_H_WISH_WITH_NOTE : TILE_H_WISH_NO_NOTE)
-      : (sectionKey === 'pricecheck')
-        ? (pageHasAnyNote ? TILE_H_PRICECHECK_WITH_NOTE : TILE_H_PRICECHECK_NO_NOTE)
       : (pageHasAnyNote ? TILE_H_DEFAULT_WITH_NOTE : TILE_H_DEFAULT_NO_NOTE);
     const height = PAD + HEADER_H + rows * tileH + (rows-1)*GAP + PAD;
 
@@ -1549,7 +1682,7 @@ async function exportPng(scope){
         const imgX = x + 10;
         const imgY = ty + 34;
         const imgW = tileW - 20;
-        const imgH = (sectionKey === 'wish')
+        const imgH = (sectionKey === 'wish' || sectionKey === 'pricecheck')
           ? (pageHasAnyNote ? (!hasPrice ? 110 : 88) : 104)
           : (pageHasAnyNote ? 88 : 96);
 
@@ -1582,8 +1715,8 @@ async function exportPng(scope){
         const nameBottom = (hasPrice ? (priceY - 8) : (ty + tileH - 10));
         const availableH = Math.max(18, nameBottom - nameY);
 
-        const startFontSize = (sectionKey === 'wish') ? 16 : 17;
-        const minFontSize = (sectionKey === 'wish') ? 11 : 12;
+        const startFontSize = (sectionKey === 'wish' || sectionKey === 'pricecheck') ? 16 : 17;
+        const minFontSize = (sectionKey === 'wish' || sectionKey === 'pricecheck') ? 11 : 12;
 
         let nameFontSize = startFontSize;
         let nameLineH = 22;
@@ -1627,13 +1760,9 @@ async function exportPng(scope){
   const sectionJobs = sections.map(s=>{
     let allItems = [];
 
-    if(s.key === 'pricecheck'){
-      allItems = lastPriceCheckItem ? [lastPriceCheckItem] : [];
-    }else{
-      allItems = state[s.key] || [];
-    }
+    allItems = state[s.key] || [];
 
-    if(s.key === 'wish'){
+    if(s.key === 'wish' || s.key === 'pricecheck'){
       allItems = allItems.slice(0, 50);
     }
 
@@ -1647,10 +1776,6 @@ async function exportPng(scope){
   });
 
   const totalDownloads = sectionJobs.reduce((sum, j)=>sum + (j.pages.length || 1), 0);
-  if(sections.some(s=>s.key === 'pricecheck') && !lastPriceCheckItem){
-    alert('Price Check export: select an item in the Price Check tab first.');
-    return;
-  }
   if(totalDownloads > 1){
     const ok = confirm(
       `This export will download ${totalDownloads} PNG files.\n\n` +
@@ -1725,7 +1850,7 @@ function drawContain(ctx, img, x, y, w, h){
 }
 
 function isKnownSection(section){
-  return section === 'wish' || section === 'sell' || section === 'sellSets' || section === 'buy';
+  return section === 'wish' || section === 'sell' || section === 'sellSets' || section === 'buy' || section === 'pricecheck';
 }
 
 function getList(section){
@@ -1758,7 +1883,7 @@ async function refreshSection(section){
   for(const entry of items){
     if(!entry?.id) continue;
     try{
-      const detail = await apiItemDetail(entry.id);
+      const detail = await apiItemDetailCached(entry.id);
       if(detail){
         entry.activeInStore = !!detail.active_in_store;
         // If the name changes upstream, keep ours in sync.
@@ -1831,7 +1956,7 @@ document.addEventListener('DOMContentLoaded', async()=>{
     themeSelect.addEventListener('change', async()=>{
       const t = themeSelect.value;
       state.settings = state.settings || {};
-      state.settings.theme = (t === 'classic' || t === 'dark' || t === 'valentine') ? t : 'classic';
+      state.settings.theme = isKnownThemeValue(t) ? t : 'classic';
       applyTheme(themeFromState());
       await saveState();
     });
@@ -1858,13 +1983,33 @@ document.addEventListener('DOMContentLoaded', async()=>{
 
   $('#btn-search')?.addEventListener('click', doSearch);
   $('#in-query')?.addEventListener('keydown', (e)=>{
-    if(e.key === 'Enter') doSearch();
+    if(e.key !== 'Enter') return;
+    e.preventDefault();
+    void (async()=>{
+      const added = await tryQuickAddFromAddItemInputs();
+      if(!added) await doSearch();
+    })();
+  });
+
+  // Enter in Note should also attempt to save.
+  $('#in-note')?.addEventListener('keydown', (e)=>{
+    if(e.key !== 'Enter') return;
+    e.preventDefault();
+    void (async()=>{
+      const added = await tryQuickAddFromAddItemInputs();
+      if(!added) await doSearch();
+    })();
   });
 
   // Price Check tab
   $('#pc-btn-search')?.addEventListener('click', priceCheckSearch);
   $('#pc-query')?.addEventListener('keydown', (e)=>{
-    if(e.key === 'Enter') priceCheckSearch();
+    if(e.key !== 'Enter') return;
+    e.preventDefault();
+    void (async()=>{
+      const added = await tryQuickAddFromPriceCheckInputs();
+      if(!added) await priceCheckSearch();
+    })();
   });
 
   $('#btn-export')?.addEventListener('click', ()=>{
@@ -1877,16 +2022,19 @@ document.addEventListener('DOMContentLoaded', async()=>{
   $('#btn-clear-sell')?.addEventListener('click', ()=>clearSection('sell'));
   $('#btn-clear-sellSets')?.addEventListener('click', ()=>clearSection('sellSets'));
   $('#btn-clear-buy')?.addEventListener('click', ()=>clearSection('buy'));
+  $('#btn-clear-pricecheck')?.addEventListener('click', ()=>clearSection('pricecheck'));
 
   $('#btn-refresh-wish')?.addEventListener('click', ()=>refreshSection('wish'));
   $('#btn-refresh-sell')?.addEventListener('click', ()=>refreshSection('sell'));
   $('#btn-refresh-sellSets')?.addEventListener('click', ()=>refreshSection('sellSets'));
   $('#btn-refresh-buy')?.addEventListener('click', ()=>refreshSection('buy'));
+  $('#btn-refresh-pricecheck')?.addEventListener('click', ()=>refreshSection('pricecheck'));
 
   $('#btn-repair-wish')?.addEventListener('click', ()=>repairImagesInSection('wish'));
   $('#btn-repair-sell')?.addEventListener('click', ()=>repairImagesInSection('sell'));
   $('#btn-repair-sellSets')?.addEventListener('click', ()=>repairImagesInSection('sellSets'));
   $('#btn-repair-buy')?.addEventListener('click', ()=>repairImagesInSection('buy'));
+  $('#btn-repair-pricecheck')?.addEventListener('click', ()=>repairImagesInSection('pricecheck'));
 
   // Keep state updated across devices.
   chrome.storage.onChanged.addListener((changes, area)=>{
@@ -1898,10 +2046,9 @@ document.addEventListener('DOMContentLoaded', async()=>{
       sell: Array.isArray(s.sell) ? s.sell : [],
       sellSets: Array.isArray(s.sellSets) ? s.sellSets : [],
       buy: Array.isArray(s.buy) ? s.buy : [],
+      pricecheck: Array.isArray(s.pricecheck) ? s.pricecheck : [],
       settings: {
-        theme: (s?.settings?.theme === 'classic' || s?.settings?.theme === 'dark' || s?.settings?.theme === 'valentine')
-          ? s.settings.theme
-          : 'classic',
+        theme: isKnownThemeValue(s?.settings?.theme) ? s.settings.theme : 'classic',
         imageSource: (s?.settings?.imageSource === 'cdn' || s?.settings?.imageSource === 'info' || s?.settings?.imageSource === 'auto')
           ? s.settings.imageSource
           : 'cdn'

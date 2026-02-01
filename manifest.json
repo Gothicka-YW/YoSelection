@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "YoSelection",
   "version": "0.1.0",
-  "description": "Personal selection builder with sync (Wish/Sell/Buy/Sell Sets) and PNG export.",
+  "description": "Personal selection builder (Wish/Sell/Buy/Sets/Price Check) with PNG export and synced settings.",
   "action": {
     "default_popup": "popup.html",
     "default_title": "YoSelection",

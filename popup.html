@@ -18,7 +18,7 @@
         <option value="all">All lists</option>
         <option value="wish">Wish List</option>
         <option value="sell">Sell</option>
-        <option value="sellSets">Sell Sets</option>
+        <option value="sellSets">Sets</option>
         <option value="buy">Buy</option>
         <option value="pricecheck">Price Check</option>
       </select>
@@ -33,8 +33,9 @@
       <select id="in-section">
         <option value="wish">Wish List</option>
         <option value="sell">Sell</option>
-        <option value="sellSets">Sell Sets</option>
+        <option value="sellSets">Sets</option>
         <option value="buy">Buy</option>
+        <option value="pricecheck">Price Check</option>
       </select>
     </div>
 
@@ -58,7 +59,7 @@
   <nav class="tabs" aria-label="Template Sections">
     <button class="tab is-active" type="button" data-tab="wish">Wish List</button>
     <button class="tab" type="button" data-tab="sell">Sell</button>
-    <button class="tab" type="button" data-tab="sellSets">Sell Sets</button>
+    <button class="tab" type="button" data-tab="sellSets">Sets</button>
     <button class="tab" type="button" data-tab="buy">Buy</button>
     <button class="tab" type="button" data-tab="pricecheck">Price Check</button>
     <button class="tab" type="button" data-tab="settings">Settings</button>
@@ -90,7 +91,7 @@
 
   <section class="card" data-panel="sellSets" hidden>
     <div class="section-head">
-      <h2>Sell Sets</h2>
+      <h2>Sets</h2>
       <div class="inline">
         <button id="btn-refresh-sellSets" class="ghost" type="button">Refresh</button>
         <button id="btn-repair-sellSets" class="ghost" type="button">Repair Images</button>
@@ -126,6 +127,16 @@
     <div id="pc-detail" class="card" style="border:1px solid var(--border); border-radius:12px; margin-top:10px;">
       <div class="hint">Select an item to view details.</div>
     </div>
+
+    <div class="section-head" style="margin-top:12px;">
+      <h2 style="margin:0; font-size:13px;">Saved Price Check List</h2>
+      <div class="inline">
+        <button id="btn-refresh-pricecheck" class="ghost" type="button">Refresh</button>
+        <button id="btn-repair-pricecheck" class="ghost" type="button">Repair Images</button>
+        <button id="btn-clear-pricecheck" class="ghost" type="button">Clear</button>
+      </div>
+    </div>
+    <div id="grid-pricecheck" class="grid"></div>
   </section>
 
   <section class="card" data-panel="settings" hidden>
@@ -157,6 +168,9 @@
         <option value="classic">Classic (Black & White)</option>
         <option value="dark">Dark</option>
         <option value="valentine">Valentine's Day</option>
+        <option value="ocean">Ocean</option>
+        <option value="forest">Forest</option>
+        <option value="sunset">Sunset</option>
       </select>
       <div class="hint">Theme syncs across devices.</div>
     </div>
