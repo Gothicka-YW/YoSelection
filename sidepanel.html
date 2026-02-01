@@ -19,6 +19,7 @@
         <option value="sell">Sell</option>
         <option value="sellSets">Sets</option>
         <option value="buy">Buy</option>
+        <option value="pdeSlots">PDE/Slots</option>
         <option value="pricecheck">Price Check</option>
       </select>
       <button id="btn-export" class="primary" type="button">Export PNG</button>
@@ -34,6 +35,7 @@
         <option value="sell">Sell</option>
         <option value="sellSets">Sets</option>
         <option value="buy">Buy</option>
+        <option value="pdeSlots">PDE/Slots</option>
         <option value="pricecheck">Price Check</option>
       </select>
     </div>
@@ -64,6 +66,7 @@
     <button class="tab" type="button" data-tab="sell">Sell</button>
     <button class="tab" type="button" data-tab="sellSets">Sets</button>
     <button class="tab" type="button" data-tab="buy">Buy</button>
+    <button class="tab" type="button" data-tab="pdeSlots">PDE/Slots</button>
     <button class="tab" type="button" data-tab="pricecheck">Price Check</button>
     <button class="tab" type="button" data-tab="settings">Settings</button>
   </nav>
@@ -114,6 +117,18 @@
       </div>
     </div>
     <div id="grid-buy" class="grid"></div>
+  </section>
+
+  <section class="card" data-panel="pdeSlots" hidden>
+    <div class="section-head">
+      <h2>PDE/Slots</h2>
+      <div class="inline">
+        <button id="btn-refresh-pdeSlots" class="ghost" type="button">Refresh</button>
+        <button id="btn-repair-pdeSlots" class="ghost" type="button">Repair Images</button>
+        <button id="btn-clear-pdeSlots" class="ghost" type="button">Clear</button>
+      </div>
+    </div>
+    <div id="grid-pdeSlots" class="grid"></div>
   </section>
 
   <section class="card" data-panel="pricecheck" hidden>

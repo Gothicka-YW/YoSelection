@@ -11,6 +11,7 @@ function defaultState(){
     sell: [],
     sellSets: [],
     buy: [],
+    pdeSlots: [],
     pricecheck: [],
     settings: {
       theme: 'classic',
@@ -41,11 +42,11 @@ function saveTabDrafts(drafts){
 }
 
 function isListTab(tabName){
-  return tabName === 'wish' || tabName === 'sell' || tabName === 'sellSets' || tabName === 'buy' || tabName === 'pricecheck';
+  return tabName === 'wish' || tabName === 'sell' || tabName === 'sellSets' || tabName === 'buy' || tabName === 'pdeSlots' || tabName === 'pricecheck';
 }
 
 function isKnownTab(tabName){
-  return tabName === 'wish' || tabName === 'sell' || tabName === 'sellSets' || tabName === 'buy' || tabName === 'pricecheck' || tabName === 'settings';
+  return tabName === 'wish' || tabName === 'sell' || tabName === 'sellSets' || tabName === 'buy' || tabName === 'pdeSlots' || tabName === 'pricecheck' || tabName === 'settings';
 }
 
 function persistDraftForTab(tabName){
@@ -176,6 +177,7 @@ function normalizeImportedState(maybe){
     sell: Array.isArray(s.sell) ? s.sell : [],
     sellSets: Array.isArray(s.sellSets) ? s.sellSets : [],
     buy: Array.isArray(s.buy) ? s.buy : [],
+    pdeSlots: Array.isArray(s.pdeSlots) ? s.pdeSlots : [],
     pricecheck: Array.isArray(s.pricecheck) ? s.pricecheck : [],
     settings: {
       theme: isKnownThemeValue(s?.settings?.theme) ? s.settings.theme : 'classic',
@@ -371,6 +373,7 @@ function normalizeStateFromStorage(maybe){
     sell: Array.isArray(s.sell) ? s.sell : [],
     sellSets: Array.isArray(s.sellSets) ? s.sellSets : [],
     buy: Array.isArray(s.buy) ? s.buy : [],
+    pdeSlots: Array.isArray(s.pdeSlots) ? s.pdeSlots : [],
     pricecheck: Array.isArray(s.pricecheck) ? s.pricecheck : [],
     settings: {
       theme: isKnownThemeValue(s?.settings?.theme) ? s.settings.theme : 'classic',
@@ -383,7 +386,7 @@ function normalizeStateFromStorage(maybe){
 
 function countItemsInState(s){
   if(!s) return 0;
-  return (Number(s?.wish?.length) || 0) + (Number(s?.sell?.length) || 0) + (Number(s?.sellSets?.length) || 0) + (Number(s?.buy?.length) || 0) + (Number(s?.pricecheck?.length) || 0);
+  return (Number(s?.wish?.length) || 0) + (Number(s?.sell?.length) || 0) + (Number(s?.sellSets?.length) || 0) + (Number(s?.buy?.length) || 0) + (Number(s?.pdeSlots?.length) || 0) + (Number(s?.pricecheck?.length) || 0);
 }
 
 function storageGet(area, key){
@@ -440,6 +443,7 @@ async function loadState(){
     sell: listState.sell,
     sellSets: listState.sellSets,
     buy: listState.buy,
+    pdeSlots: listState.pdeSlots,
     pricecheck: listState.pricecheck,
     settings: haveSyncedSettings ? syncedSettingsOnly : listState.settings
   };
@@ -466,6 +470,38 @@ function buildYwCdnImageUrlFromId(itemId){
   const g1 = s.substring(0, 2);
   const g2 = s.substring(2, 4);
   return `https://yw-web.yoworld.com/cdn/items/${g1}/${g2}/${id}/${id}.png`;
+}
+
+function buildYwCdnImageUrlFromIdWithExt(itemId, ext){
+  const id = Number(itemId);
+  if(!Number.isFinite(id) || id <= 0) return '';
+  const safeExt = String(ext || 'png').trim().toLowerCase();
+  const e = (safeExt === 'jpg' || safeExt === 'jpeg' || safeExt === 'png' || safeExt === 'webp' || safeExt === 'gif') ? safeExt : 'png';
+  const s = String(Math.trunc(id)).padStart(4, '0');
+  const g1 = s.substring(0, 2);
+  const g2 = s.substring(2, 4);
+  return `https://yw-web.yoworld.com/cdn/items/${g1}/${g2}/${id}/${id}.${e}`;
+}
+
+function buildYwApiItemImageUrlFromId(itemId, size){
+  const id = Number(itemId);
+  if(!Number.isFinite(id) || id <= 0) return '';
+  // The YoWorld.info API supports a limited set of sizes; 130_100 is reliable.
+  const sz = (typeof size === 'string' && /^\d+_\d+$/.test(size.trim())) ? size.trim() : '130_100';
+  return `https://api.yoworld.info/api/items/${id}/image/${sz}`;
+}
+
+function unwrapYoWorldInfoProxyInnerUrl(proxyUrl){
+  const u = (typeof proxyUrl === 'string') ? proxyUrl.trim() : '';
+  if(!u) return '';
+  const m = u.match(/api\.yoworld\.info\/extension\.php\?[\s\S]*?\bx=([^&\s#]+)/i);
+  if(!m || !m[1]) return '';
+  try{ return decodeURIComponent(m[1]); }catch{ return ''; }
+}
+
+function isYoWorldInfoProxyToPng(proxyUrl){
+  const inner = unwrapYoWorldInfoProxyInnerUrl(proxyUrl);
+  return !!inner && /\.png(\?|#|$)/i.test(inner);
 }
 
 function yoworldInfoProxyUrlForImageUrl(imageUrl){
@@ -549,25 +585,59 @@ function bestImageUrlForItem(item){
   const source = imageSourceFromState();
   const direct = s(item.imageUrl);
   const cdn = s(item.ywCdnImageUrl) || buildYwCdnImageUrlFromId(item.id);
-  const info = s(item.ywInfoImageUrl) || yoworldInfoProxyUrlForImageUrl(cdn || direct);
+  const api = buildYwApiItemImageUrlFromId(item.id, '130_100');
+  const storedInfo = s(item.ywInfoImageUrl);
+  const info = storedInfo || api || yoworldInfoProxyUrlForImageUrl(cdn || direct);
 
-  if(source === 'info') return info || direct || cdn;
-  if(source === 'auto') return direct || cdn || info;
+  if(source === 'info'){
+    // Avoid getting stuck on the extension.php proxy-to-missing-png placeholder (it can load as a black image).
+    if(storedInfo && !isYoWorldInfoProxyToPng(storedInfo)) return storedInfo;
+    return api || storedInfo || direct || cdn;
+  }
+  if(source === 'auto') return direct || cdn || api || info;
   return direct || cdn || info;
 }
 
-async function ensureInfoImageUrl(entry){
+async function ensureInfoImageUrl(entry, currentUrl){
   if(!entry || !entry.id) return '';
-  if(typeof entry.ywInfoImageUrl === 'string' && entry.ywInfoImageUrl.trim()) return entry.ywInfoImageUrl.trim();
+
+  const cur = (typeof currentUrl === 'string') ? currentUrl.trim() : '';
+  const existingInfo = (typeof entry.ywInfoImageUrl === 'string') ? entry.ywInfoImageUrl.trim() : '';
+  if(existingInfo && existingInfo !== cur && !isYoWorldInfoProxyToPng(existingInfo)) return existingInfo;
 
   // Primary strategy: use YoWorld.info's image proxy for the derived CDN URL.
   // This endpoint often returns a valid PNG even when the direct CDN URL 404s.
-  const cdn = entry.ywCdnImageUrl || buildYwCdnImageUrlFromId(entry.id);
-  if(cdn && !entry.ywCdnImageUrl) entry.ywCdnImageUrl = cdn;
-  const proxied = yoworldInfoProxyUrlForImageUrl(cdn || entry.imageUrl);
-  if(proxied){
-    entry.ywInfoImageUrl = proxied;
-    return proxied;
+
+  const cdnPng = (typeof entry.ywCdnImageUrl === 'string' && entry.ywCdnImageUrl.trim())
+    ? entry.ywCdnImageUrl.trim()
+    : buildYwCdnImageUrlFromId(entry.id);
+
+  if(cdnPng && !entry.ywCdnImageUrl) entry.ywCdnImageUrl = cdnPng;
+
+  const cdnJpg = buildYwCdnImageUrlFromIdWithExt(entry.id, 'jpg');
+  const proxyPng = yoworldInfoProxyUrlForImageUrl(cdnPng || entry.imageUrl);
+  const proxyJpg = yoworldInfoProxyUrlForImageUrl(cdnJpg);
+  const apiImg = buildYwApiItemImageUrlFromId(entry.id, '130_100');
+
+  // Prefer real assets (CDN .jpg) and the reliable API image endpoint before the extension proxy.
+  // The proxy can return a "valid" image even when the underlying CDN URL is missing (black placeholder).
+  const candidates = [];
+  if(existingInfo && !isYoWorldInfoProxyToPng(existingInfo)) candidates.push(existingInfo);
+  candidates.push(
+    cdnJpg,
+    apiImg,
+    cdnPng,
+    proxyPng,
+    proxyJpg,
+    existingInfo,
+    (typeof entry.imageUrl === 'string' ? entry.imageUrl.trim() : '')
+  );
+
+  for(const u of candidates){
+    if(u && u !== cur){
+      entry.ywInfoImageUrl = u;
+      return u;
+    }
   }
 
   try{
@@ -692,7 +762,7 @@ async function addItemById(section, itemId, note){
   }catch{}
 
   const cdnImageUrl = buildYwCdnImageUrlFromId(id);
-  infoImageUrl = yoworldInfoProxyUrlForImageUrl(cdnImageUrl);
+  infoImageUrl = buildYwApiItemImageUrlFromId(id, '130_100');
   const source = imageSourceFromState();
   let chosenImageUrl = cdnImageUrl;
   if(source === 'info'){
@@ -764,6 +834,7 @@ function render(){
   renderGrid('sell', $('#grid-sell'));
   renderGrid('sellSets', $('#grid-sellSets'));
   renderGrid('buy', $('#grid-buy'));
+  renderGrid('pdeSlots', $('#grid-pdeSlots'));
   renderGrid('pricecheck', $('#grid-pricecheck'));
 }
 
@@ -841,24 +912,30 @@ function renderGrid(section, root){
     img.loading = 'lazy';
     img.referrerPolicy = 'no-referrer';
     img.addEventListener('error', async()=>{
-      // Try to repair broken images by swapping to YoWorld.info URL.
-      if(img.dataset.fallbackTried === '1') return;
-      img.dataset.fallbackTried = '1';
-      const fallback = await ensureInfoImageUrl(item);
-      if(fallback){
-        if(item.imageUrl !== fallback){
-          item.imageUrl = fallback;
-          img.src = fallback;
+      // Some items use .jpg on the YoWorld CDN (not .png). Also, the info proxy can fail.
+      // Allow a few sequential fallbacks instead of giving up after the first.
+      const stage = Number(img.dataset.fallbackStage || '0');
+      if(stage >= 4) return;
+      img.dataset.fallbackStage = String(stage + 1);
+
+      const current = String(img.currentSrc || img.src || '').trim();
+      const next = await ensureInfoImageUrl(item, current);
+      if(next && next !== current){
+        if(item.imageUrl !== next){
+          item.imageUrl = next;
           try{ await saveState(); }catch{}
         }
+        img.src = next;
         return;
       }
 
-      // As a last resort, retry derived CDN URL if we weren't already using it.
-      const cdn = buildYwCdnImageUrlFromId(item?.id);
-      if(cdn && img.src !== cdn){
-        item.imageUrl = cdn;
-        img.src = cdn;
+      // Last resort: try swapping .png <-> .jpg directly on CDN.
+      const cdnJpg = buildYwCdnImageUrlFromIdWithExt(item?.id, 'jpg');
+      const cdnPng = buildYwCdnImageUrlFromIdWithExt(item?.id, 'png');
+      const alt = (current && current.endsWith('.jpg')) ? cdnPng : cdnJpg;
+      if(alt && alt !== current){
+        item.imageUrl = alt;
+        img.src = alt;
         try{ await saveState(); }catch{}
       }
     });
@@ -992,10 +1069,15 @@ async function doSearch(){
       thumb.loading = 'lazy';
       thumb.referrerPolicy = 'no-referrer';
       thumb.addEventListener('error', async()=>{
-        if(thumb.dataset.fallbackTried === '1') return;
-        thumb.dataset.fallbackTried = '1';
-        const u = yoworldInfoProxyUrlForImageUrl(buildYwCdnImageUrlFromId(id));
-        if(u) thumb.src = u;
+        const stage = Number(thumb.dataset.fallbackStage || '0');
+        if(stage >= 3) return;
+        thumb.dataset.fallbackStage = String(stage + 1);
+        const current = String(thumb.currentSrc || thumb.src || '').trim();
+        const cdnJpg = buildYwCdnImageUrlFromIdWithExt(id, 'jpg');
+        const proxyJpg = yoworldInfoProxyUrlForImageUrl(cdnJpg);
+        const proxyPng = yoworldInfoProxyUrlForImageUrl(buildYwCdnImageUrlFromId(id));
+        const next = stage === 0 ? cdnJpg : (stage === 1 ? proxyJpg : proxyPng);
+        if(next && next !== current) thumb.src = next;
       });
       row.appendChild(thumb);
 
@@ -1062,10 +1144,15 @@ async function doSearch(){
       thumb.loading = 'lazy';
       thumb.referrerPolicy = 'no-referrer';
       thumb.addEventListener('error', async()=>{
-        if(thumb.dataset.fallbackTried === '1') return;
-        thumb.dataset.fallbackTried = '1';
-        const u = yoworldInfoProxyUrlForImageUrl(buildYwCdnImageUrlFromId(it.id));
-        if(u) thumb.src = u;
+        const stage = Number(thumb.dataset.fallbackStage || '0');
+        if(stage >= 3) return;
+        thumb.dataset.fallbackStage = String(stage + 1);
+        const current = String(thumb.currentSrc || thumb.src || '').trim();
+        const cdnJpg = buildYwCdnImageUrlFromIdWithExt(it.id, 'jpg');
+        const proxyJpg = yoworldInfoProxyUrlForImageUrl(cdnJpg);
+        const proxyPng = yoworldInfoProxyUrlForImageUrl(buildYwCdnImageUrlFromId(it.id));
+        const next = stage === 0 ? cdnJpg : (stage === 1 ? proxyJpg : proxyPng);
+        if(next && next !== current) thumb.src = next;
       });
       row.appendChild(thumb);
 
@@ -1134,7 +1221,7 @@ async function doSearch(){
         }
 
         const cdnImageUrl = buildYwCdnImageUrlFromId(it.id);
-        infoImageUrl = yoworldInfoProxyUrlForImageUrl(cdnImageUrl);
+        infoImageUrl = buildYwApiItemImageUrlFromId(it.id, '130_100');
         const source = imageSourceFromState();
         let chosenImageUrl = cdnImageUrl;
         if(source === 'info'){
@@ -1307,12 +1394,13 @@ function exportSectionsForScope(scope){
     { key: 'sell', title: 'Sell' },
     { key: 'sellSets', title: 'Sets' },
     { key: 'buy', title: 'Buy' },
+    { key: 'pdeSlots', title: 'PDE/Slots' },
     { key: 'pricecheck', title: 'Price Check' }
   ];
 
   let s = scope;
   if(s === 'active') s = getActiveTab();
-  if(!['wish','sell','sellSets','buy','pricecheck','all'].includes(s)) s = 'wish';
+  if(!['wish','sell','sellSets','buy','pdeSlots','pricecheck','all'].includes(s)) s = 'wish';
   if(s === 'all' || !s) return allLists;
 
   const one = allLists.find(x=>x.key === s);
@@ -1379,7 +1467,7 @@ async function priceCheckShowDetail(itemId){
 
   const name = String(pick(detail, ['name','item_name','title']) || `Item ${id}`);
   const cdnImageUrl = buildYwCdnImageUrlFromId(id);
-  const infoImageUrl = yoworldInfoProxyUrlForImageUrl(cdnImageUrl);
+  const infoImageUrl = buildYwApiItemImageUrlFromId(id, '130_100');
   const imgUrl = bestImageUrlForItem({ id, imageUrl: '', ywCdnImageUrl: cdnImageUrl, ywInfoImageUrl: infoImageUrl });
   const link = yoworldInfoItemPageUrl(id);
 
@@ -1401,6 +1489,35 @@ async function priceCheckShowDetail(itemId){
   img.alt = name;
   img.loading = 'lazy';
   img.referrerPolicy = 'no-referrer';
+  img.addEventListener('error', async()=>{
+    const stage = Number(img.dataset.fallbackStage || '0');
+    if(stage >= 4) return;
+    img.dataset.fallbackStage = String(stage + 1);
+
+    const current = String(img.currentSrc || img.src || '').trim();
+    const cdnJpg = buildYwCdnImageUrlFromIdWithExt(id, 'jpg');
+    const proxyJpg = yoworldInfoProxyUrlForImageUrl(cdnJpg);
+    const proxyPng = yoworldInfoProxyUrlForImageUrl(buildYwCdnImageUrlFromId(id));
+
+    const next = stage === 0 ? cdnJpg : (stage === 1 ? proxyJpg : (stage === 2 ? proxyPng : ''));
+    if(next && next !== current){
+      img.src = next;
+      if(lastPriceCheckItem && lastPriceCheckItem.id === id) lastPriceCheckItem.imageUrl = next;
+      return;
+    }
+
+    // Final try: use the shared helper (may return stored/proxy candidates).
+    if(stage === 3){
+      const entry = (lastPriceCheckItem && lastPriceCheckItem.id === id)
+        ? lastPriceCheckItem
+        : { id, imageUrl: '', ywCdnImageUrl: cdnImageUrl, ywInfoImageUrl: infoImageUrl };
+      const helperNext = await ensureInfoImageUrl(entry, current);
+      if(helperNext && helperNext !== current){
+        img.src = helperNext;
+        if(lastPriceCheckItem && lastPriceCheckItem.id === id) lastPriceCheckItem.imageUrl = helperNext;
+      }
+    }
+  });
   head.appendChild(img);
   const meta = el('div','meta');
   meta.appendChild(Object.assign(el('div','name'), { textContent: name }));
@@ -1536,13 +1653,25 @@ async function priceCheckSearch(){
       thumb.loading = 'lazy';
       thumb.referrerPolicy = 'no-referrer';
       thumb.addEventListener('error', async()=>{
-        if(thumb.dataset.fallbackTried === '1') return;
-        thumb.dataset.fallbackTried = '1';
-        try{
-          const detail = await apiItemDetail(it.id);
-          const u = extractYoWorldInfoImageUrl(detail, it.id);
-          if(u) thumb.src = u;
-        }catch{}
+        const stage = Number(thumb.dataset.fallbackStage || '0');
+        if(stage >= 4) return;
+        thumb.dataset.fallbackStage = String(stage + 1);
+
+        const current = String(thumb.currentSrc || thumb.src || '').trim();
+        if(stage === 3){
+          try{
+            const detail = await apiItemDetail(it.id);
+            const u = extractYoWorldInfoImageUrl(detail, it.id);
+            if(u && u !== current) thumb.src = u;
+          }catch{}
+          return;
+        }
+
+        const cdnJpg = buildYwCdnImageUrlFromIdWithExt(it.id, 'jpg');
+        const proxyJpg = yoworldInfoProxyUrlForImageUrl(cdnJpg);
+        const proxyPng = yoworldInfoProxyUrlForImageUrl(buildYwCdnImageUrlFromId(it.id));
+        const next = stage === 0 ? cdnJpg : (stage === 1 ? proxyJpg : proxyPng);
+        if(next && next !== current) thumb.src = next;
       });
       row.appendChild(thumb);
 
@@ -1688,14 +1817,34 @@ async function exportPng(scope){
 
         try{
           let img;
-          try{
-            img = await loadImage(bestImageUrlForItem(item));
-          }catch{
-            // If export hits broken CDN URLs, try YoWorld.info as fallback.
-            const fallback = await ensureInfoImageUrl(item);
-            if(fallback) img = await loadImage(fallback);
-            else throw new Error('no fallback');
+          let currentUrl = bestImageUrlForItem(item);
+          const attempted = new Set();
+
+          for(let attempt = 0; attempt < 5; attempt++){
+            attempted.add(currentUrl);
+            try{
+              img = await loadImage(currentUrl);
+              break;
+            }catch{
+              const next = await ensureInfoImageUrl(item, currentUrl);
+              if(next && !attempted.has(next)){
+                currentUrl = next;
+                continue;
+              }
+
+              // Last resort: try swapping .png <-> .jpg directly on CDN.
+              const cdnJpg = buildYwCdnImageUrlFromIdWithExt(item?.id, 'jpg');
+              const cdnPng = buildYwCdnImageUrlFromIdWithExt(item?.id, 'png');
+              const alt = (currentUrl && currentUrl.endsWith('.jpg')) ? cdnPng : cdnJpg;
+              if(alt && !attempted.has(alt)){
+                currentUrl = alt;
+                continue;
+              }
+              throw new Error('no fallback');
+            }
           }
+
+          if(!img) throw new Error('no image');
           drawContain(ctx, img, imgX, imgY, imgW, imgH);
           ctx.strokeStyle = pal.tileBorder;
           ctx.lineWidth = 2;
@@ -1850,7 +1999,7 @@ function drawContain(ctx, img, x, y, w, h){
 }
 
 function isKnownSection(section){
-  return section === 'wish' || section === 'sell' || section === 'sellSets' || section === 'buy' || section === 'pricecheck';
+  return section === 'wish' || section === 'sell' || section === 'sellSets' || section === 'buy' || section === 'pdeSlots' || section === 'pricecheck';
 }
 
 function getList(section){
@@ -1905,7 +2054,7 @@ async function repairImagesInSection(section){
     return;
   }
 
-  const ok = confirm('This will check each item image and swap to the YoWorld.info image link when broken. Continue?');
+  const ok = confirm('This will check each item image and swap to a better image link when needed (including fixing some black placeholder images). Continue?');
   if(!ok) return;
 
   let changed = 0;
@@ -1916,10 +2065,20 @@ async function repairImagesInSection(section){
     checked++;
 
     const currentUrl = String(entry.imageUrl || '').trim();
+    const looksProxyPng = isYoWorldInfoProxyToPng(currentUrl);
     const good = await canLoadImage(currentUrl, 4500);
-    if(good) continue;
+    if(good && !looksProxyPng) continue;
 
-    const fallback = await ensureInfoImageUrl(entry);
+    let fallback = '';
+    if(looksProxyPng){
+      // Try the real CDN .jpg first; if it exists, it avoids the proxy placeholder.
+      const cdnJpg = buildYwCdnImageUrlFromIdWithExt(entry.id, 'jpg');
+      if(await canLoadImage(cdnJpg, 4500)) fallback = cdnJpg;
+      else fallback = buildYwApiItemImageUrlFromId(entry.id, '130_100');
+    }else{
+      fallback = await ensureInfoImageUrl(entry, currentUrl);
+    }
+
     if(fallback && fallback !== currentUrl){
       entry.imageUrl = fallback;
       changed++;
@@ -2022,18 +2181,21 @@ document.addEventListener('DOMContentLoaded', async()=>{
   $('#btn-clear-sell')?.addEventListener('click', ()=>clearSection('sell'));
   $('#btn-clear-sellSets')?.addEventListener('click', ()=>clearSection('sellSets'));
   $('#btn-clear-buy')?.addEventListener('click', ()=>clearSection('buy'));
+  $('#btn-clear-pdeSlots')?.addEventListener('click', ()=>clearSection('pdeSlots'));
   $('#btn-clear-pricecheck')?.addEventListener('click', ()=>clearSection('pricecheck'));
 
   $('#btn-refresh-wish')?.addEventListener('click', ()=>refreshSection('wish'));
   $('#btn-refresh-sell')?.addEventListener('click', ()=>refreshSection('sell'));
   $('#btn-refresh-sellSets')?.addEventListener('click', ()=>refreshSection('sellSets'));
   $('#btn-refresh-buy')?.addEventListener('click', ()=>refreshSection('buy'));
+  $('#btn-refresh-pdeSlots')?.addEventListener('click', ()=>refreshSection('pdeSlots'));
   $('#btn-refresh-pricecheck')?.addEventListener('click', ()=>refreshSection('pricecheck'));
 
   $('#btn-repair-wish')?.addEventListener('click', ()=>repairImagesInSection('wish'));
   $('#btn-repair-sell')?.addEventListener('click', ()=>repairImagesInSection('sell'));
   $('#btn-repair-sellSets')?.addEventListener('click', ()=>repairImagesInSection('sellSets'));
   $('#btn-repair-buy')?.addEventListener('click', ()=>repairImagesInSection('buy'));
+  $('#btn-repair-pdeSlots')?.addEventListener('click', ()=>repairImagesInSection('pdeSlots'));
   $('#btn-repair-pricecheck')?.addEventListener('click', ()=>repairImagesInSection('pricecheck'));
 
   // Keep state updated across devices.
@@ -2046,6 +2208,7 @@ document.addEventListener('DOMContentLoaded', async()=>{
       sell: Array.isArray(s.sell) ? s.sell : [],
       sellSets: Array.isArray(s.sellSets) ? s.sellSets : [],
       buy: Array.isArray(s.buy) ? s.buy : [],
+      pdeSlots: Array.isArray(s.pdeSlots) ? s.pdeSlots : [],
       pricecheck: Array.isArray(s.pricecheck) ? s.pricecheck : [],
       settings: {
         theme: isKnownThemeValue(s?.settings?.theme) ? s.settings.theme : 'classic',
